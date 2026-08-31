@@ -16,6 +16,7 @@ import {
 } from '../../services/socketClient';
 import { useAuth } from '../../hooks/useAuthContext';
 import { useProctoring } from '../../hooks/useProctoring';
+import DraggableWebcamPip from '../../shared/DraggableWebcamPip';
 import Editor from '@monaco-editor/react';
 
 // Default starter project templates if question doesn't have custom starter files
@@ -384,39 +385,72 @@ export default function CandidateAITestScreen() {
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#0f172a' }}>
-      {/* ── Top Timer Bar ──────────────────────────────────────────────────── */}
-      <div className="timer-bar" style={{ zIndex: 100 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={{ color: 'white', fontWeight: 700, fontSize: '0.9rem' }}>
-            🤖 {session.test.title} (AI Test)
-          </span>
-          <span className="badge badge-teal">{session.room.roomName}</span>
-          {isSaving && <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem' }}>💾 Saving...</span>}
+      {/* ── Fixed Stacked Header: (a) Test name + Room/ID row, then (b) Timer + Action row ── */}
+      <div className="test-screen-header">
+        {/* Row (a): Test Name & Room ID Badge */}
+        <div className="test-header-top-row">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{
+              background: '#0E7C86', borderRadius: '50%', width: 28, height: 28,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem'
+            }}>
+              🤖
+            </div>
+            <span style={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', letterSpacing: '0.01em' }}>
+              {session.test.title} <span style={{ color: '#38bdf8', fontSize: '0.85rem', fontWeight: 600 }}>(AI Test)</span>
+            </span>
+            <span className="badge badge-teal" style={{ fontSize: '0.75rem', padding: '3px 10px' }}>
+              {session.room.roomName || session.room.roomCode}
+            </span>
+            {isSaving && <span style={{ color: '#38bdf8', fontSize: '0.75rem' }}>💾 Saving...</span>}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <span style={{ fontSize: '0.8rem', color: 'rgba(255, 255, 255, 0.7)' }}>
+              Candidate: <strong style={{ color: 'white' }}>{user?.name || user?.email}</strong>
+            </span>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.8rem' }}>Time Remaining</span>
-          <span className={`timer-countdown ${urgency}`} aria-live="polite">
-            {timerDisplay}
-          </span>
-        </div>
+        {/* Row (b): Timer & Actions */}
+        <div className="timer-bar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', fontWeight: 500 }}>
+              Status:
+            </span>
+            <span style={{ color: 'white', fontWeight: 600, fontSize: '0.85rem' }}>
+              {submittedQuestions.has(activeQuestion?._id) ? '✓ Current Task Submitted' : 'In Progress'}
+            </span>
+          </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <button
-            id="ai-submit-question-btn"
-            className="btn btn-primary btn-sm"
-            onClick={handleSubmitQuestion}
-            disabled={isSubmitting || submittedQuestions.has(activeQuestion?._id)}
-          >
-            {isSubmitting ? 'Submitting...' : submittedQuestions.has(activeQuestion?._id) ? '✓ Submitted' : 'Submit Project'}
-          </button>
-          <button
-            id="ai-submit-all-btn"
-            className="btn btn-danger btn-sm"
-            onClick={handleSubmitAll}
-          >
-            Submit All &amp; Finish
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', fontWeight: 600 }}>
+              Time Remaining:
+            </span>
+            <span className={`timer-countdown ${urgency}`} aria-live="polite" aria-label="Time remaining">
+              {timerDisplay}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button
+              id="ai-submit-question-btn"
+              className="btn btn-primary btn-sm"
+              onClick={handleSubmitQuestion}
+              disabled={isSubmitting || submittedQuestions.has(activeQuestion?._id)}
+              style={{ fontWeight: 600 }}
+            >
+              {isSubmitting ? 'Submitting...' : submittedQuestions.has(activeQuestion?._id) ? '✓ Submitted' : 'Submit Project'}
+            </button>
+            <button
+              id="ai-submit-all-btn"
+              className="btn btn-danger btn-sm"
+              onClick={handleSubmitAll}
+              style={{ fontWeight: 700, padding: '6px 16px' }}
+            >
+              Submit All &amp; Finish
+            </button>
+          </div>
         </div>
       </div>
 
@@ -702,59 +736,8 @@ export default function CandidateAITestScreen() {
         </div>
       </div>
 
-      {/* ── Corner AI Proctoring PIP Feed (FR-5.2, FR-7.1, FR-7.2) ── */}
-      <div
-        style={{
-          position: 'fixed',
-          bottom: 16,
-          right: 16,
-          zIndex: 1000,
-          background: '#1A2B3C',
-          padding: 6,
-          borderRadius: 8,
-          boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
-          border: '1.5px solid #334155',
-        }}
-      >
-        <div style={{ position: 'relative', width: 130, height: 98, borderRadius: 6, overflow: 'hidden', background: '#000' }}>
-          <video
-            ref={proctoring.videoRef}
-            autoPlay
-            muted
-            playsInline
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          />
-          <div style={{ position: 'absolute', top: 4, left: 4, background: 'rgba(0,0,0,0.65)', padding: '2px 6px', borderRadius: 4, fontSize: '0.62rem', color: '#2ECC71', fontWeight: 700 }}>
-            ● REC
-          </div>
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 4,
-              left: 4,
-              right: 4,
-              background:
-                proctoring.faceCount === 1
-                  ? 'rgba(46, 204, 113, 0.85)'
-                  : proctoring.faceCount > 1
-                  ? 'rgba(231, 76, 60, 0.95)'
-                  : 'rgba(241, 196, 15, 0.95)',
-              padding: '2px 4px',
-              borderRadius: 3,
-              fontSize: '0.6rem',
-              color: '#fff',
-              textAlign: 'center',
-              fontWeight: 600,
-            }}
-          >
-            {proctoring.faceCount === 1
-              ? '✓ Face Detected'
-              : proctoring.faceCount > 1
-              ? '⚠️ Multiple Faces!'
-              : '❌ No Face!'}
-          </div>
-        </div>
-      </div>
+      {/* ── Movable AI Proctoring PIP Feed (FR-5.2, FR-7.1, FR-7.2) ── */}
+      <DraggableWebcamPip videoRef={proctoring.videoRef} faceCount={proctoring.faceCount} />
 
       {/* ── Fullscreen Enforcement Lock Overlay (FR-5.2, FR-5.3) ── */}
       {!proctoring.isFullscreen && !disqualified && (

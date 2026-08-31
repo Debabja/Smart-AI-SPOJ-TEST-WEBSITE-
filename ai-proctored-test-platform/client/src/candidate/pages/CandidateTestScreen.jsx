@@ -16,6 +16,7 @@ import {
 } from '../../services/socketClient';
 import { useAuth } from '../../hooks/useAuthContext';
 import { useProctoring } from '../../hooks/useProctoring';
+import DraggableWebcamPip from '../../shared/DraggableWebcamPip';
 
 // ── Monaco Editor (lazy-loaded to avoid bundle bloat) ─────────────────────────
 import Editor from '@monaco-editor/react';
@@ -303,35 +304,87 @@ export default function CandidateTestScreen() {
     );
   }
 
+  // Set starter code or saved draft when question or language changes
+  useEffect(() => {
+    if (!activeQuestion) {
+      setCode('');
+      return;
+    }
+    const key = `draft_${session?.test?._id}_${activeQuestion._id}_${language}`;
+    const saved = sessionStorage.getItem(key);
+    if (saved !== null) {
+      setCode(saved);
+    } else {
+      const defaultTemplates = {
+        python: `# Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\nimport sys\n\ndef solve():\n    # Write your solution here\n    pass\n\nif __name__ == '__main__':\n    solve()\n`,
+        javascript: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\nfunction solve() {\n    // Write your solution here\n}\n`,
+        cpp: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\n#include <iostream>\n#include <vector>\n#include <string>\nusing namespace std;\n\nint main() {\n    // Write your solution here\n    return 0;\n}\n`,
+        c: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\n#include <stdio.h>\n\nint main() {\n    // Write your solution here\n    return 0;\n}\n`,
+        java: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\nimport java.util.*;\n\npublic class Main {\n    public static void main(String[] args) {\n        // Write your solution here\n        Scanner sc = new Scanner(System.in);\n    }\n}\n`,
+        react: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\nimport React from 'react';\n\nexport default function Solution() {\n    return (\n        <div>\n            {/* Write your React solution here */}\n        </div>\n    );\n}\n`,
+      };
+      setCode(defaultTemplates[language] || '// Write your solution here\n');
+    }
+  }, [activeQuestion, language, activeQuestionIdx, session?.test?._id]);
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* ── Timer Bar (FR-5.1, always visible) ─────────────────────────────── */}
-      <div className="timer-bar">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.8rem' }}>
-            🌐 {session.test.title}
-          </span>
-          <span className="badge badge-teal">{session.room.roomName}</span>
+      {/* ── Fixed Stacked Header: (a) Test name + Room/ID row, then (b) Timer + Action row ── */}
+      <div className="test-screen-header">
+        {/* Row (a): Test Name & Room ID Badge */}
+        <div className="test-header-top-row">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{
+              background: '#0E7C86', borderRadius: '50%', width: 28, height: 28,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem'
+            }}>
+              🌐
+            </div>
+            <span style={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', letterSpacing: '0.01em' }}>
+              {session.test.title}
+            </span>
+            <span className="badge badge-teal" style={{ fontSize: '0.75rem', padding: '3px 10px' }}>
+              {session.room.roomName || session.room.roomCode}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <span style={{ fontSize: '0.8rem', color: 'rgba(255, 255, 255, 0.7)' }}>
+              Candidate: <strong style={{ color: 'white' }}>{user?.name || user?.email}</strong>
+            </span>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.8rem' }}>Time Remaining</span>
-          <span className={`timer-countdown ${urgency}`} aria-live="polite" aria-label="Time remaining">
-            {timerDisplay}
-          </span>
-        </div>
+        {/* Row (b): Timer & Actions */}
+        <div className="timer-bar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', fontWeight: 500 }}>
+              Progress:
+            </span>
+            <span style={{ color: 'white', fontWeight: 600, fontSize: '0.85rem' }}>
+              {submittedQuestions.size}/{session.questions?.length || 0} Submitted
+            </span>
+          </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
-          <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.8rem', alignSelf: 'center' }}>
-            {submittedQuestions.size}/{session.questions.length} submitted
-          </span>
-          <button
-            id="submit-all-btn"
-            className="btn btn-danger btn-sm"
-            onClick={handleSubmitAll}
-          >
-            Submit All & Finish
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', fontWeight: 600 }}>
+              Time Remaining:
+            </span>
+            <span className={`timer-countdown ${urgency}`} aria-live="polite" aria-label="Time remaining">
+              {timerDisplay}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button
+              id="submit-all-btn"
+              className="btn btn-danger btn-sm"
+              onClick={handleSubmitAll}
+              style={{ fontWeight: 700, padding: '6px 16px' }}
+            >
+              Submit All &amp; Finish
+            </button>
+          </div>
         </div>
       </div>
 
@@ -361,17 +414,23 @@ export default function CandidateTestScreen() {
               Questions
             </div>
           </div>
-          {session.questions.map((q, idx) => (
-            <QuestionTab
-              key={q._id}
-              question={q}
-              index={idx}
-              isActive={idx === activeQuestionIdx}
-              visiblePassed={questionProgress[q._id]?.passed || 0}
-              visibleTotal={questionProgress[q._id]?.total || q.visibleTestCases?.length || 0}
-              onClick={() => setActiveQuestionIdx(idx)}
-            />
-          ))}
+          {(!session.questions || session.questions.length === 0) ? (
+            <div style={{ padding: 20, textAlign: 'center', color: '#6b7280', fontSize: '0.85rem' }}>
+              No questions found for this test session.
+            </div>
+          ) : (
+            session.questions.map((q, idx) => (
+              <QuestionTab
+                key={q._id}
+                question={q}
+                index={idx}
+                isActive={idx === activeQuestionIdx}
+                visiblePassed={questionProgress[q._id]?.passed || 0}
+                visibleTotal={questionProgress[q._id]?.total || q.visibleTestCases?.length || 0}
+                onClick={() => setActiveQuestionIdx(idx)}
+              />
+            ))
+          )}
         </div>
 
         {/* ── Content area ─────────────────────────────────────────────────── */}
@@ -587,59 +646,8 @@ export default function CandidateTestScreen() {
         </div>
       </div>
 
-      {/* ── Corner AI Proctoring PIP Feed (FR-5.2, FR-7.1, FR-7.2) ── */}
-      <div
-        style={{
-          position: 'fixed',
-          bottom: 16,
-          right: 16,
-          zIndex: 1000,
-          background: '#1A2B3C',
-          padding: 6,
-          borderRadius: 8,
-          boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
-          border: '1.5px solid #334155',
-        }}
-      >
-        <div style={{ position: 'relative', width: 130, height: 98, borderRadius: 6, overflow: 'hidden', background: '#000' }}>
-          <video
-            ref={proctoring.videoRef}
-            autoPlay
-            muted
-            playsInline
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          />
-          <div style={{ position: 'absolute', top: 4, left: 4, background: 'rgba(0,0,0,0.65)', padding: '2px 6px', borderRadius: 4, fontSize: '0.62rem', color: '#2ECC71', fontWeight: 700 }}>
-            ● REC
-          </div>
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 4,
-              left: 4,
-              right: 4,
-              background:
-                proctoring.faceCount === 1
-                  ? 'rgba(46, 204, 113, 0.85)'
-                  : proctoring.faceCount > 1
-                  ? 'rgba(231, 76, 60, 0.95)'
-                  : 'rgba(241, 196, 15, 0.95)',
-              padding: '2px 4px',
-              borderRadius: 3,
-              fontSize: '0.6rem',
-              color: '#fff',
-              textAlign: 'center',
-              fontWeight: 600,
-            }}
-          >
-            {proctoring.faceCount === 1
-              ? '✓ Face Detected'
-              : proctoring.faceCount > 1
-              ? '⚠️ Multiple Faces!'
-              : '❌ No Face!'}
-          </div>
-        </div>
-      </div>
+      {/* ── Movable AI Proctoring PIP Feed (FR-5.2, FR-7.1, FR-7.2) ── */}
+      <DraggableWebcamPip videoRef={proctoring.videoRef} faceCount={proctoring.faceCount} />
 
       {/* ── Fullscreen Enforcement Lock Overlay (FR-5.2, FR-5.3) ── */}
       {!proctoring.isFullscreen && !disqualified && (

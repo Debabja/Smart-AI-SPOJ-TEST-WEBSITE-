@@ -96,6 +96,10 @@ export const api = {
     }),
   reportViolation: (data) => axios.post('/proctoring/violation', data),
   reviewMalpractice: (logId, data) => axios.patch(`/malpractice-logs/${logId}/review`, data),
+  getCandidateMalpracticeLogs: (testId, candidateId) =>
+    axios.get(`/tests/${testId}/candidates/${candidateId}/malpractice-logs`),
+  getTestMalpracticeLogs: (testId, params) =>
+    axios.get(`/tests/${testId}/malpractice-logs`, { params }),
 
   // Evaluation / Reports
   getResults: (testId) => axios.get(`/tests/${testId}/results`),

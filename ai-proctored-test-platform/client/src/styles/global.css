@@ -566,20 +566,39 @@ tbody td {
   background: var(--color-bg);
 }
 
+/* ── Candidate Test Header (Stacked: Test Info Row -> Timer & Actions Row) ──── */
+.test-screen-header {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 100%;
+  z-index: 20;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  background: var(--color-navy);
+}
+
+.test-header-top-row {
+  height: 44px;
+  background: #111e2e;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  flex-shrink: 0;
+}
+
 /* ── Timer Display (FR-5.1 — candidate test-taking) ─────────────────────────── */
 .timer-bar {
-  position: fixed;
-  top: 64px;
-  left: 0;
-  right: 0;
+  position: relative;
   height: 48px;
   background: var(--color-navy);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
-  z-index: 99;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  padding: 0 20px;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .timer-countdown {
