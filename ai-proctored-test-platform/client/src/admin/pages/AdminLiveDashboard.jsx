@@ -282,19 +282,23 @@ export default function AdminLiveDashboard() {
   const debounceBufferRef = useRef({});
   const debounceTimerRef = useRef(null);
 
-  // Load Test & Rooms
+  // Load Test, Rooms, & Initial Active Candidates
   useEffect(() => {
     let isMounted = true;
     const fetchInitialData = async () => {
       try {
         setLoading(true);
-        const [testRes, roomsRes] = await Promise.all([
+        const [testRes, roomsRes, liveRes] = await Promise.all([
           api.getTest(testId),
           api.getRooms(testId),
+          api.getLiveCandidates(testId).catch(() => ({ data: { candidates: {} } })),
         ]);
         if (!isMounted) return;
         setTest(testRes.data.test);
         setRooms(roomsRes.data.rooms || []);
+        if (liveRes.data?.candidates) {
+          setCandidatesMap(liveRes.data.candidates);
+        }
       } catch (err) {
         toast.error(err.response?.data?.error || 'Failed to initialize live dashboard');
       } finally {
@@ -498,14 +502,15 @@ export default function AdminLiveDashboard() {
 
   const roomsById = useMemo(() => {
     const map = {};
-    rooms.forEach((r) => { map[r._id] = r.roomName; });
+    rooms.forEach((r) => { map[String(r._id)] = r.roomName; });
     return map;
   }, [rooms]);
 
   // Filter candidates
   const candidateList = useMemo(() => {
     return Object.values(candidatesMap).filter((c) => {
-      const matchesRoom = selectedRoomId === 'ALL' || c.roomId === selectedRoomId;
+      const cRoomId = typeof c.roomId === 'object' ? (c.roomId?._id || c.roomId?.id) : c.roomId;
+      const matchesRoom = selectedRoomId === 'ALL' || String(cRoomId) === String(selectedRoomId);
       const matchesStatus = filterStatus === 'ALL' || c.colorStatus === filterStatus || c.status === filterStatus;
       const matchesSearch = !searchQuery.trim() || c.name?.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesRoom && matchesStatus && matchesSearch;
