@@ -12,34 +12,55 @@ const YOLO_SERVICE_URL = process.env.YOLO_SERVICE_URL || 'http://localhost:8001'
  * @returns {{ phoneDetected: boolean, confidence?: number }}
  */
 const detectPhone = async (imageBuffer) => {
-  try {
+  let baseUrl = (process.env.YOLO_SERVICE_URL || 'http://localhost:8001').replace(/\/detect\/?$/, '');
+
+  const createForm = () => {
     const form = new FormData();
     form.append('image', imageBuffer, {
       filename: 'frame.jpg',
       contentType: 'image/jpeg',
     });
+    return form;
+  };
 
-    const response = await fetch(`${YOLO_SERVICE_URL}/detect`, {
-      method: 'POST',
-      body: form,
-      headers: form.getHeaders(),
-      timeout: 10000, // 10s timeout — must complete within heartbeat interval
-    });
+  try {
+    let response;
+    const primaryForm = createForm();
+    try {
+      response = await fetch(`${baseUrl}/detect`, {
+        method: 'POST',
+        body: primaryForm,
+        headers: primaryForm.getHeaders(),
+        timeout: 6000,
+      });
+    } catch (netErr) {
+      // If primary failed (e.g. ENOTFOUND yolo-service when running outside docker), try localhost:8001
+      if (!baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1')) {
+        console.debug('[YOLO] Primary URL failed (' + netErr.message + '), trying localhost:8001 fallback...');
+        const fallbackForm = createForm();
+        response = await fetch('http://localhost:8001/detect', {
+          method: 'POST',
+          body: fallbackForm,
+          headers: fallbackForm.getHeaders(),
+          timeout: 6000,
+        });
+      } else {
+        throw netErr;
+      }
+    }
 
-    if (!response.ok) {
-      console.error('[YOLO] Service error:', response.status);
-      return { phoneDetected: false }; // fail-open: don't flag on service error
+    if (!response || !response.ok) {
+      console.error('[YOLO] Service error:', response ? response.status : 'no response');
+      return { phoneDetected: false };
     }
 
     const data = await response.json();
-    // YOLO service returns: { phoneDetected: boolean, confidence: float, detections: [...] }
     return {
       phoneDetected: data.phoneDetected === true,
       confidence: data.confidence,
     };
   } catch (err) {
     console.error('[YOLO] Detection failed:', err.message);
-    // Fail-open: if YOLO service is unavailable, don't flag as violation
     return { phoneDetected: false };
   }
 };

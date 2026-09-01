@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../../hooks/useAuthContext';
 import { useProctoring } from '../../hooks/useProctoring';
 import DraggableWebcamPip from '../../shared/DraggableWebcamPip';
+import CameraDisconnectedOverlay from '../components/CameraDisconnectedOverlay';
 import Editor from '@monaco-editor/react';
 import globussoftLogo from '../../assets/globussoft-logo.png';
 
@@ -136,6 +137,7 @@ export default function CandidateAITestScreen() {
       }
       await api.submitAll(session.test._id);
     } catch (_) {}
+    toast.dismiss();
     navigate('/candidate/complete');
   }, [session, activeQuestion, files, navigate]);
 
@@ -172,7 +174,7 @@ export default function CandidateAITestScreen() {
   const proctoring = useProctoring({
     testId: session?.test?._id,
     roomId: session?.room?._id,
-    candidateId: user?.id,
+    candidateId: user?.id || user?._id,
     enabled: Boolean(session && user && !disqualified),
     allowInternalCopyPaste: true,
   });
@@ -180,6 +182,7 @@ export default function CandidateAITestScreen() {
   // Socket proctor warnings / disqualifications
   useEffect(() => {
     const onWarning = ({ message }) => {
+      if (isSubmittingAll.current) return;
       setWarningMessage(message);
       toast.error(`⚠️ ${message}`, { duration: 8000 });
     };
@@ -197,6 +200,7 @@ export default function CandidateAITestScreen() {
     onTestEnded(onEnded);
 
     return () => {
+      toast.dismiss();
       offCandidateWarning(onWarning);
       offCandidateDisqualified(onDisqualify);
       offTestEnded(onEnded);
@@ -319,6 +323,7 @@ export default function CandidateAITestScreen() {
         await api.submitAiTest(activeQuestion._id, { filesJson: files, promptLog: chatMessages });
       }
       await api.submitAll(session.test._id);
+      toast.dismiss();
       navigate('/candidate/complete');
     } catch (err) {
       console.error('Submit all error:', err);
@@ -441,7 +446,7 @@ export default function CandidateAITestScreen() {
               id="ai-submit-question-btn"
               className="btn btn-primary btn-sm"
               onClick={handleSubmitQuestion}
-              disabled={isSubmitting || submittedQuestions.has(activeQuestion?._id)}
+              disabled={isSubmitting || submittedQuestions.has(activeQuestion?._id) || disqualified || proctoring?.isCameraDisconnected}
               style={{ fontWeight: 600 }}
             >
               {isSubmitting ? 'Submitting...' : submittedQuestions.has(activeQuestion?._id) ? '✓ Submitted' : 'Submit Project'}
@@ -450,6 +455,7 @@ export default function CandidateAITestScreen() {
               id="ai-submit-all-btn"
               className="btn btn-danger btn-sm"
               onClick={handleSubmitAll}
+              disabled={isSubmittingAll.current || disqualified || proctoring?.isCameraDisconnected}
               style={{ fontWeight: 700, padding: '6px 16px' }}
             >
               Submit All &amp; Finish
@@ -602,6 +608,7 @@ export default function CandidateAITestScreen() {
                     wordWrap: 'on',
                     scrollBeyondLastLine: false,
                     tabSize: 2,
+                    readOnly: Boolean(disqualified || proctoring?.isCameraDisconnected),
                   }}
                 />
               </div>
@@ -715,7 +722,7 @@ export default function CandidateAITestScreen() {
               placeholder="Ask Kimi anything..."
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              disabled={isAiTyping}
+              disabled={isAiTyping || disqualified || proctoring?.isCameraDisconnected}
               style={{
                 flex: 1,
                 background: '#1e293b',
@@ -731,7 +738,7 @@ export default function CandidateAITestScreen() {
               id="kimi-send-btn"
               type="submit"
               className="btn btn-primary btn-sm"
-              disabled={isAiTyping || !chatInput.trim()}
+              disabled={isAiTyping || !chatInput.trim() || disqualified || proctoring?.isCameraDisconnected}
               style={{ padding: '8px 14px' }}
             >
               Send
@@ -774,6 +781,16 @@ export default function CandidateAITestScreen() {
           </button>
         </div>
       )}
+
+      {/* Camera Disconnected Full-Screen Opaque Blackout Overlay */}
+      <CameraDisconnectedOverlay
+        isVisible={Boolean(proctoring?.isCameraDisconnected)}
+        timerDisplay={timerDisplay}
+        hasHardwareCamera={Boolean(proctoring?.hasHardwareCamera)}
+        isVerifyingFace={Boolean(proctoring?.isVerifyingFace)}
+        onRetry={proctoring?.reconnectCamera}
+        videoRef={proctoring?.videoRef}
+      />
     </div>
   );
 }

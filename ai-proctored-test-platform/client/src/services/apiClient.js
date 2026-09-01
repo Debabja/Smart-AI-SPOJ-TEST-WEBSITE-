@@ -123,6 +123,8 @@ export const api = {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
   reportViolation: (data) => axios.post('/proctoring/violation', data),
+  reportCameraDisconnected: (data) => axios.post('/proctoring/camera-disconnected', data),
+  reportCameraReconnected: (data) => axios.post('/proctoring/camera-reconnected', data),
   reviewMalpractice: (logId, data) => axios.patch(`/malpractice-logs/${logId}/review`, data),
   getCandidateMalpracticeLogs: (testId, candidateId) =>
     axios.get(`/tests/${testId}/candidates/${candidateId}/malpractice-logs`),

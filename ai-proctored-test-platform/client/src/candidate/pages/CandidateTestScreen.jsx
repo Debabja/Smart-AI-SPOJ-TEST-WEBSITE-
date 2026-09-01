@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../../hooks/useAuthContext';
 import { useProctoring } from '../../hooks/useProctoring';
 import DraggableWebcamPip from '../../shared/DraggableWebcamPip';
+import CameraDisconnectedOverlay from '../components/CameraDisconnectedOverlay';
 import globussoftLogo from '../../assets/globussoft-logo.png';
 
 // ── Monaco Editor (lazy-loaded to avoid bundle bloat) ─────────────────────────
@@ -229,6 +230,54 @@ export default function CandidateTestScreen() {
     };
   }, [isDragging]);
 
+  // ── Resizable Question Details Panel (Width) ───────────────────────────────
+  const [questionDetailWidth, setQuestionDetailWidth] = useState(() => {
+    const saved = sessionStorage.getItem('test_question_detail_width');
+    return saved ? Math.max(300, Math.min(850, parseInt(saved, 10))) : 460;
+  });
+  const [isDraggingDetail, setIsDraggingDetail] = useState(false);
+  const dragStartDetailXRef = useRef(0);
+  const dragStartDetailWidthRef = useRef(questionDetailWidth);
+
+  useEffect(() => {
+    sessionStorage.setItem('test_question_detail_width', String(questionDetailWidth));
+  }, [questionDetailWidth]);
+
+  const handleDetailMouseDown = useCallback((e) => {
+    e.preventDefault();
+    setIsDraggingDetail(true);
+    dragStartDetailXRef.current = e.clientX;
+    dragStartDetailWidthRef.current = questionDetailWidth;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+  }, [questionDetailWidth]);
+
+  useEffect(() => {
+    if (!isDraggingDetail) return;
+
+    const handleMouseMove = (e) => {
+      const delta = e.clientX - dragStartDetailXRef.current;
+      const newWidth = Math.max(300, Math.min(850, dragStartDetailWidthRef.current + delta));
+      setQuestionDetailWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingDetail(false);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [isDraggingDetail]);
+
   // ── Resizable Bottom Panel (Height) (BUG-11) ────────────────────────────────
   const [bottomHeight, setBottomHeight] = useState(() => {
     const saved = sessionStorage.getItem('test_bottom_panel_height');
@@ -357,6 +406,7 @@ export default function CandidateTestScreen() {
     try {
       await api.submitAll(session.test._id);
     } catch (_) {}
+    toast.dismiss();
     navigate('/candidate/complete');
   }, [session, navigate]);
 
@@ -399,7 +449,7 @@ export default function CandidateTestScreen() {
   const proctoring = useProctoring({
     testId: session?.test?._id,
     roomId: session?.room?._id,
-    candidateId: user?.id,
+    candidateId: user?.id || user?._id,
     enabled: Boolean(session && user && !disqualified),
     allowInternalCopyPaste: false,
   });
@@ -407,6 +457,7 @@ export default function CandidateTestScreen() {
   // ── Socket: candidate:warning + candidate:disqualified + test:ended ───────────
   useEffect(() => {
     const onWarning = ({ violationType, message }) => {
+      if (isSubmittingAll.current) return;
       setWarningMessage(message);
       toast.error(`⚠️ ${message}`, { duration: 8000 });
     };
@@ -426,6 +477,7 @@ export default function CandidateTestScreen() {
     onTestEnded(onEnded);
 
     return () => {
+      toast.dismiss();
       offCandidateWarning(onWarning);
       offCandidateDisqualified(onDisqualified);
       offTestEnded(onEnded);
@@ -501,6 +553,7 @@ export default function CandidateTestScreen() {
     isSubmittingAll.current = true;
     try {
       await api.submitAll(session.test._id);
+      toast.dismiss();
       navigate('/candidate/complete');
     } catch (err) {
       toast.error('Submit failed');
@@ -627,6 +680,7 @@ export default function CandidateTestScreen() {
               id="submit-all-btn"
               className="btn btn-danger btn-sm"
               onClick={handleSubmitAll}
+              disabled={isSubmittingAll.current || disqualified || proctoring?.isCameraDisconnected}
               style={{ fontWeight: 700, padding: '6px 16px' }}
             >
               Submit All &amp; Finish
@@ -763,11 +817,22 @@ export default function CandidateTestScreen() {
           />
         )}
 
-        {/* ── Content area ─────────────────────────────────────────────────── */}
-        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '400px 1fr', overflow: 'hidden' }}>
+        {/* ── Content area with resizable Question Details and Code Editor ── */}
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
           {/* Question panel */}
-          <div className="test-question-panel" style={{ borderRight: '1px solid #e5e7eb' }}>
+          <div
+            className="test-question-panel"
+            style={{
+              width: questionDetailWidth,
+              minWidth: 300,
+              maxWidth: 850,
+              flexShrink: 0,
+              borderRight: '1px solid #e5e7eb',
+              overflowY: 'auto',
+              transition: isDraggingDetail ? 'none' : 'width 150ms ease',
+            }}
+          >
             {activeQuestion && (
               <>
                 <div>
@@ -845,8 +910,44 @@ export default function CandidateTestScreen() {
             )}
           </div>
 
+          {/* Question Detail Resizable Divider Handle */}
+          <div
+            onMouseDown={handleDetailMouseDown}
+            style={{
+              width: 8,
+              cursor: 'col-resize',
+              background: isDraggingDetail ? '#0E7C86' : '#f8fafc',
+              borderRight: isDraggingDetail ? '1px solid #0E7C86' : '1px solid #e2e8f0',
+              borderLeft: isDraggingDetail ? '1px solid #0E7C86' : '1px solid #e2e8f0',
+              flexShrink: 0,
+              zIndex: 10,
+              transition: 'background 150ms ease',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              userSelect: 'none',
+            }}
+            title="Drag to resize Question Details panel"
+            onMouseEnter={(e) => {
+              if (!isDraggingDetail) e.currentTarget.style.background = 'rgba(14, 124, 134, 0.25)';
+            }}
+            onMouseLeave={(e) => {
+              if (!isDraggingDetail) e.currentTarget.style.background = '#f8fafc';
+            }}
+          >
+            {/* Visual drag handle grip bar */}
+            <div
+              style={{
+                width: 2,
+                height: 32,
+                borderRadius: 1,
+                background: isDraggingDetail ? '#ffffff' : '#94a3b8',
+              }}
+            />
+          </div>
+
           {/* ── Editor + Output panel ──────────────────────────────────────── */}
-          <div style={{ display: 'flex', flexDirection: 'column', background: '#1e1e2e', overflow: 'hidden' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#1e1e2e', overflow: 'hidden', minWidth: 350 }}>
 
             {/* Editor toolbar */}
             <div className="editor-toolbar">
@@ -871,7 +972,7 @@ export default function CandidateTestScreen() {
                   id="run-code-btn"
                   className="btn btn-secondary btn-sm"
                   onClick={handleRun}
-                  disabled={isRunning || !code}
+                  disabled={isRunning || !code || disqualified || proctoring?.isCameraDisconnected}
                   style={{ background: '#2d2d44', color: '#cdd6f4', border: '1px solid #444' }}
                 >
                   {isRunning ? <><span className="spinner" style={{ borderTopColor: '#cdd6f4', width: 14, height: 14 }} /> Running...</> : '▶ Run'}
@@ -880,7 +981,7 @@ export default function CandidateTestScreen() {
                   id="submit-question-btn"
                   className="btn btn-primary btn-sm"
                   onClick={handleSubmit}
-                  disabled={isSubmitting || !code || submittedQuestions.has(activeQuestion?._id)}
+                  disabled={isSubmitting || !code || submittedQuestions.has(activeQuestion?._id) || disqualified || proctoring?.isCameraDisconnected}
                 >
                   {isSubmitting ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Submitting...</>
                     : submittedQuestions.has(activeQuestion?._id) ? '✓ Submitted'
@@ -903,8 +1004,8 @@ export default function CandidateTestScreen() {
                   fontLigatures: true,
                   minimap: { enabled: false },
                   lineNumbers: 'on',
-                  // FR-5.4: Disable copy-paste in editor
-                  readOnly: false,
+                  // FR-5.4: Disable copy-paste in editor + Lock to readOnly on CAMERA_DISCONNECTED
+                  readOnly: Boolean(disqualified || proctoring?.isCameraDisconnected),
                   copyWithSyntaxHighlighting: false,
                   // Prevent paste from outside by catching events
                   contextmenu: false, // FR-5.4: disable right-click context menu
@@ -1086,6 +1187,19 @@ export default function CandidateTestScreen() {
           </button>
         </div>
       )}
+
+      {/* Movable AI Proctoring PIP Feed */}
+      <DraggableWebcamPip videoRef={proctoring.videoRef} faceCount={proctoring.faceCount} />
+
+      {/* Camera Disconnected Full-Screen Opaque Blackout Overlay */}
+      <CameraDisconnectedOverlay
+        isVisible={Boolean(proctoring?.isCameraDisconnected)}
+        timerDisplay={timerDisplay}
+        hasHardwareCamera={Boolean(proctoring?.hasHardwareCamera)}
+        isVerifyingFace={Boolean(proctoring?.isVerifyingFace)}
+        onRetry={proctoring?.reconnectCamera}
+        videoRef={proctoring?.videoRef}
+      />
     </div>
   );
 }

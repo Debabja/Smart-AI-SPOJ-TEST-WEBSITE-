@@ -1271,6 +1271,21 @@ export default function AdminLiveDashboard() {
                       {new Date().toLocaleTimeString()}
                     </span>
                   </div>
+                  {activeAlert.violationType === 'CAMERA_DISCONNECTED' && (
+                    <div style={{ gridColumn: 'span 2', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '8px 12px' }}>
+                      <span style={{ fontWeight: 700, color: '#b91c1c', display: 'block', fontSize: '0.85rem' }}>
+                        📷 Camera Disconnected Security Alert
+                      </span>
+                      <span style={{ color: '#7f1d1d', fontSize: '0.78rem' }}>
+                        Candidate camera was disconnected. Fullscreen opaque blackout overlay and editor lock are active.
+                      </span>
+                      {activeAlert.durationSeconds !== null && activeAlert.durationSeconds !== undefined && (
+                        <div style={{ marginTop: 4, fontWeight: 700, color: '#15803d', fontSize: '0.82rem' }}>
+                          Total Disconnect Duration: {activeAlert.durationSeconds}s
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Proof Screenshot Image */}
@@ -1459,7 +1474,7 @@ export default function AdminLiveDashboard() {
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <span
                                   className={`badge ${
-                                    log.violationType === 'PHONE_DETECTED' || log.violationType === 'MULTIPLE_FACES'
+                                    log.violationType === 'PHONE_DETECTED' || log.violationType === 'MULTIPLE_FACES' || log.violationType === 'CAMERA_DISCONNECTED'
                                       ? 'badge-danger'
                                       : 'badge-warning'
                                   }`}
@@ -1470,7 +1485,8 @@ export default function AdminLiveDashboard() {
                                   {log.violationType === 'NO_FACE_15MIN' && '👤 No Face (15+ min)'}
                                   {log.violationType === 'TAB_SWITCH' && '🔄 Tab Switch'}
                                   {log.violationType === 'FULLSCREEN_EXIT' && '⛶ Fullscreen Exit'}
-                                  {!['PHONE_DETECTED', 'MULTIPLE_FACES', 'NO_FACE_15MIN', 'TAB_SWITCH', 'FULLSCREEN_EXIT'].includes(log.violationType) && (log.violationType || 'Violation')}
+                                  {log.violationType === 'CAMERA_DISCONNECTED' && '📷 Camera Disconnected'}
+                                  {!['PHONE_DETECTED', 'MULTIPLE_FACES', 'NO_FACE_15MIN', 'TAB_SWITCH', 'FULLSCREEN_EXIT', 'CAMERA_DISCONNECTED'].includes(log.violationType) && (log.violationType || 'Violation')}
                                 </span>
                                 <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
                                   🕒 {new Date(log.detectedAt).toLocaleTimeString()} · {new Date(log.detectedAt).toLocaleDateString()}
@@ -1495,6 +1511,37 @@ export default function AdminLiveDashboard() {
                                 )}
                               </div>
                             </div>
+
+                            {/* Camera Disconnect Specific Details */}
+                            {log.violationType === 'CAMERA_DISCONNECTED' && (
+                              <div style={{
+                                background: log.reconnectAt ? '#ecfdf5' : '#fef2f2',
+                                border: `1px solid ${log.reconnectAt ? '#a7f3d0' : '#fecaca'}`,
+                                borderRadius: 6,
+                                padding: '8px 12px',
+                                fontSize: '0.8rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 4,
+                              }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                                  <span style={{ fontWeight: 700, color: log.reconnectAt ? '#065f46' : '#991b1b' }}>
+                                    {log.reconnectAt ? '🟢 Resolved (Camera Reconnected & Face Verified)' : '🔴 Camera Disconnected — Opaque Overlay & Lock Active'}
+                                  </span>
+                                  {log.durationSeconds !== null && log.durationSeconds !== undefined && (
+                                    <span style={{ fontWeight: 800, color: '#0f172a', background: log.reconnectAt ? '#d1fae5' : '#fee2e2', padding: '2px 8px', borderRadius: 4, fontSize: '0.78rem' }}>
+                                      Duration: {log.durationSeconds}s {log.durationSeconds >= 60 ? `(${Math.floor(log.durationSeconds / 60)}m ${log.durationSeconds % 60}s)` : ''}
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ color: '#475569', fontSize: '0.75rem' }}>
+                                  Disconnected at: <strong>{new Date(log.disconnectAt || log.detectedAt).toLocaleTimeString()}</strong>
+                                  {log.reconnectAt && (
+                                    <span> · Reconnected at: <strong>{new Date(log.reconnectAt).toLocaleTimeString()}</strong></span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
 
                             {/* Proof Screenshot Frame */}
                             {log.proofScreenshotUrl ? (

@@ -1,8 +1,8 @@
 // Judge0 Service — Module 3
 // Handles code execution requests to the self-hosted Judge0 instance
 // Judge0 API documentation: https://judge0.com/
+// Per PRD Section 5 & 9.5: ALL code execution runs strictly through sandboxed Judge0 instances
 const fetch = require('node-fetch');
-const { spawn } = require('child_process');
 
 // Language ID mapping for Judge0 (standard IDs from Judge0 documentation)
 const LANGUAGE_IDS = {
@@ -14,76 +14,15 @@ const LANGUAGE_IDS = {
   react: 63,        // React uses JavaScript/Node for evaluation
 };
 
-const JUDGE0_API_URL = process.env.JUDGE0_API_URL || 'http://localhost:2358';
+const getJudge0BaseUrl = () => {
+  return (process.env.JUDGE0_API_URL || 'http://localhost:2358').replace(/\/+$/, '');
+};
+
 const JUDGE0_API_KEY = process.env.JUDGE0_API_KEY || '';
 
 /**
- * Local process sandbox execution fallback when Judge0 daemon is offline
- */
-async function fallbackExecute(code, language, stdin = '', expectedOutput = '') {
-  return new Promise((resolve) => {
-    try {
-      let cmd = 'python3';
-      let args = ['-c', code];
-
-      if (language === 'javascript' || language === 'react') {
-        cmd = 'node';
-        args = ['-e', code];
-      } else if (language === 'python') {
-        cmd = 'python3';
-        args = ['-c', code];
-      } else {
-        // Fallback for non-interpreted languages in container
-        return resolve({
-          stdout: expectedOutput || '',
-          stderr: null,
-          status: { id: 3, description: 'Accepted' },
-        });
-      }
-
-      const proc = spawn(cmd, args, { timeout: 5000 });
-      let stdout = '';
-      let stderr = '';
-
-      proc.stdout.on('data', (d) => { stdout += d.toString(); });
-      proc.stderr.on('data', (d) => { stderr += d.toString(); });
-
-      if (stdin) {
-        proc.stdin.write(stdin);
-      }
-      proc.stdin.end();
-
-      proc.on('close', (exitCode) => {
-        resolve({
-          stdout,
-          stderr: stderr || null,
-          status: {
-            id: exitCode === 0 ? 3 : 11,
-            description: exitCode === 0 ? 'Accepted' : 'Runtime Error',
-          },
-        });
-      });
-
-      proc.on('error', () => {
-        // Fallback if local binary missing in container
-        resolve({
-          stdout: expectedOutput || '',
-          stderr: null,
-          status: { id: 3, description: 'Accepted' },
-        });
-      });
-    } catch {
-      resolve({
-        stdout: expectedOutput || '',
-        stderr: null,
-        status: { id: 3, description: 'Accepted' },
-      });
-    }
-  });
-}
-
-/**
  * Submit a single code execution to Judge0 and wait for result.
+ * Strictly routes through Judge0 API — no local shell execution fallback.
  * @param {string} code - Source code
  * @param {string} language - Language name (python, java, cpp, etc.)
  * @param {string} stdin - Standard input
@@ -93,37 +32,62 @@ async function fallbackExecute(code, language, stdin = '', expectedOutput = '') 
 const executeCode = async (code, language, stdin = '', expectedOutput = '') => {
   const languageId = LANGUAGE_IDS[language];
   if (!languageId) {
-    throw new Error(`Unsupported language: ${language}`);
+    return {
+      stdout: null,
+      stderr: `Unsupported language: ${language}`,
+      status: { id: 13, description: 'Unsupported Language' },
+    };
   }
 
-  try {
-    const headers = {
-      'Content-Type': 'application/json',
-      ...(JUDGE0_API_KEY && { 'X-Auth-Token': JUDGE0_API_KEY }),
-    };
+  const primaryUrl = getJudge0BaseUrl();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(JUDGE0_API_KEY && { 'X-Auth-Token': JUDGE0_API_KEY }),
+  };
 
-    const submitResponse = await fetch(`${JUDGE0_API_URL}/submissions?base64_encoded=false&wait=true`, {
+  const payload = JSON.stringify({
+    language_id: languageId,
+    source_code: code,
+    stdin: stdin || '',
+    expected_output: expectedOutput || undefined,
+    cpu_time_limit: 5,
+    memory_limit: 256 * 1024,
+  });
+
+  const sendToJudge0 = async (baseUrl) => {
+    const url = `${baseUrl}/submissions?base64_encoded=false&wait=true`;
+    const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        language_id: languageId,
-        source_code: code,
-        stdin: stdin || '',
-        expected_output: expectedOutput || undefined,
-        cpu_time_limit: 5,
-        memory_limit: 256 * 1024,
-      }),
-      timeout: 2000,
+      body: payload,
+      timeout: 12000,
     });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Judge0 responded with HTTP ${response.status}: ${errText}`);
+    }
+    return await response.json();
+  };
 
-    if (submitResponse.ok) {
-      return await submitResponse.json();
+  try {
+    try {
+      return await sendToJudge0(primaryUrl);
+    } catch (primaryErr) {
+      // If primary URL failed (e.g. ENOTFOUND judge0 when running server outside docker container), try localhost:2358
+      if (!primaryUrl.includes('localhost') && !primaryUrl.includes('127.0.0.1')) {
+        console.debug('[Judge0] Primary URL failed (' + primaryErr.message + '), trying http://localhost:2358 fallback...');
+        return await sendToJudge0('http://localhost:2358');
+      }
+      throw primaryErr;
     }
   } catch (err) {
-    // Judge0 unreachable -> fallback to sandbox execution
+    console.error('[Judge0] Code execution request failed:', err.message);
+    return {
+      stdout: null,
+      stderr: `Judge0 execution service unavailable: ${err.message}. Please verify the Judge0 container is running.`,
+      status: { id: 13, description: 'Service Unavailable' },
+    };
   }
-
-  return await fallbackExecute(code, language, stdin, expectedOutput);
 };
 
 /**

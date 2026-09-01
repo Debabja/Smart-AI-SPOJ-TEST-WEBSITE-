@@ -102,26 +102,49 @@ export default function CandidateInstructions() {
           duration: 5000,
         });
 
+        // Request display media with monitor (Entire Screen) preference and exclude current tab
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: { cursor: 'always' },
+          video: {
+            displaySurface: 'monitor',
+            cursor: 'always',
+          },
           audio: false,
+          selfBrowserSurface: 'exclude',
+          surfaceSwitching: 'include',
+          systemAudio: 'exclude',
         });
 
         const screenTracks = screenStream.getVideoTracks();
         const hasScreen = screenTracks.length > 0 && screenTracks[0].readyState === 'live';
 
         if (hasScreen) {
+          // Validate that the user shared their entire monitor, not a single browser tab or application window
+          const trackSettings = screenTracks[0].getSettings();
+          const surface = trackSettings.displaySurface;
+
+          if (surface && surface !== 'monitor') {
+            // Hard-gate violation: Candidate shared a Tab or Window instead of Entire Screen
+            screenTracks[0].stop();
+            setScreenStream(null);
+            setScreenGranted(false);
+            const msg = 'Invalid Selection: You selected a single browser tab or window. For anti-cheating proctoring compliance, you MUST select "Entire Screen". Click "Grant Permissions" and select the "Entire Screen" tab.';
+            setError(msg);
+            toast.error(msg, { duration: 7000 });
+            return;
+          }
+
           setScreenStream(screenStream);
           setScreenGranted(true);
 
           screenTracks[0].onended = () => {
             setScreenGranted(false);
+            setScreenStream(null);
             toast.error('Screen sharing was stopped. Please grant screen sharing to proceed.');
           };
         }
       }
 
-      if (hasVideo && hasAudio) {
+      if (hasVideo && hasAudio && screenGranted) {
         setError('');
         toast.success('Camera, Microphone, and Screen Sharing verified!');
       }
@@ -129,13 +152,15 @@ export default function CandidateInstructions() {
       console.error('Media permission error:', err);
 
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setError('Permission was denied or cancelled. Camera, microphone, and screen sharing are all mandatory for this proctored test. Please click "Grant Permissions" and allow each prompt.');
+        setScreenGranted(false);
+        setScreenStream(null);
+        setError('Permission was denied or cancelled. Camera, microphone, and Entire Screen sharing are all mandatory to start this test. Please click "Grant Permissions" and allow each prompt.');
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         setError('No camera or microphone found. Please connect a working webcam and microphone to proceed.');
       } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
         setError('Camera or microphone is already in use by another application. Please close other applications using your devices and try again.');
       } else {
-        setError('Camera, microphone, and screen sharing access are mandatory. Please grant permissions and try again.');
+        setError('Camera, microphone, and Entire Screen sharing access are mandatory. Please grant permissions and try again.');
       }
     }
   };
@@ -183,6 +208,7 @@ export default function CandidateInstructions() {
         navigate('/candidate/test');
       }
     } catch (err) {
+      console.error('[Instructions] Start test error:', JSON.stringify(err.response?.data) || err.message);
       setError(err.response?.data?.error || 'Failed to start test attempt');
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
@@ -194,7 +220,7 @@ export default function CandidateInstructions() {
 
   if (!joinData) return null;
 
-  const isPermissionsComplete = webcamGranted && micGranted;
+  const isPermissionsComplete = webcamGranted && micGranted && screenGranted;
 
   return (
     <div className="app-layout" style={{ minHeight: '100vh', background: '#F7F9FA', display: 'flex', flexDirection: 'column' }}>

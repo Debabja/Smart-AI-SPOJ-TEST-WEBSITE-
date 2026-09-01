@@ -1,21 +1,29 @@
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import { useAuth } from '../../hooks/useAuthContext';
 import globussoftLogo from '../../assets/globussoft-logo.png';
 import { stopScreenStream } from '../../services/screenStreamManager';
+import { disconnectSocket } from '../../services/socketClient';
 
 export default function CandidateTestComplete() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Release active screen sharing stream when test concludes (BUG-13)
+    // 1. Immediately dismiss all leftover proctoring violation warnings and toasts
+    toast.dismiss();
+    // 2. Release active screen sharing stream when test concludes (BUG-13)
     stopScreenStream();
+    // 3. Disconnect candidate socket to close any in-flight proctoring streams
+    disconnectSocket();
   }, []);
 
   const handleDone = () => {
     // Clear session data
+    toast.dismiss();
     stopScreenStream();
+    disconnectSocket();
     sessionStorage.removeItem('testSession');
     sessionStorage.removeItem('joinData');
     logout();

@@ -38,10 +38,15 @@ const submitFrame = [
           candidateId
         );
 
-        // Get roomId from active submission
+        // Get roomId from active submission or joined room
         const Submission = require('../models/Submission');
+        const Room = require('../models/Room');
         const activeSub = await Submission.findOne({ candidateId, testId, status: 'IN_PROGRESS' });
-        const roomId = activeSub?.roomId;
+        let roomId = activeSub?.roomId;
+        if (!roomId) {
+          const candidateRoom = await Room.findOne({ testId, 'joinedCandidates.candidateId': candidateId });
+          roomId = candidateRoom?._id;
+        }
 
         const log = await MalpracticeLog.create({
           candidateId,
@@ -236,10 +241,171 @@ const getTestMalpracticeLogs = async (req, res, next) => {
   }
 };
 
+// ── POST /proctoring/camera-disconnected ────────────────────────────────────
+const reportCameraDisconnected = async (req, res, next) => {
+  try {
+    let { candidateId, testId, roomId, disconnectAt, screenshotBase64 } = req.body;
+
+    if (!candidateId && req.user) {
+      candidateId = req.user.id;
+    }
+
+    if (req.user.type === 'candidate' && String(req.user.id) !== String(candidateId)) {
+      return res.status(403).json({ error: 'Cannot report violation for another candidate' });
+    }
+
+    if (!roomId && candidateId) {
+      const candidate = await Candidate.findById(candidateId).lean();
+      roomId = candidate?.currentRoomId;
+    }
+
+    if (!candidateId || !testId) {
+      return res.status(400).json({ error: 'candidateId and testId are required' });
+    }
+
+    // Check if there is already an open CAMERA_DISCONNECTED log for this candidate & test
+    let log = await MalpracticeLog.findOne({
+      candidateId,
+      testId,
+      violationType: 'CAMERA_DISCONNECTED',
+      reconnectAt: null,
+    });
+
+    if (!log) {
+      let proofScreenshotUrl = null;
+      if (screenshotBase64) {
+        const buffer = Buffer.from(
+          screenshotBase64.replace(/^data:image\/\w+;base64,/, ''),
+          'base64'
+        );
+        proofScreenshotUrl = await cloudinaryService.uploadScreenshot(buffer, testId, candidateId);
+      }
+
+      log = await MalpracticeLog.create({
+        candidateId,
+        testId,
+        roomId,
+        violationType: 'CAMERA_DISCONNECTED',
+        disconnectAt: disconnectAt ? new Date(disconnectAt) : new Date(),
+        detectedAt: disconnectAt ? new Date(disconnectAt) : new Date(),
+        proofScreenshotUrl,
+        resolved: false,
+      });
+    }
+
+    const candidate = await Candidate.findById(candidateId, 'name');
+    const malpracticeCount = await MalpracticeLog.countDocuments({ candidateId, testId });
+
+    const io = req.app.get('io');
+    io.to(`test:${testId}:admin`).emit('malpractice:alert', {
+      malpracticeLogId: log._id,
+      candidateId,
+      candidateName: candidate?.name || 'Unknown',
+      roomId,
+      violationType: 'CAMERA_DISCONNECTED',
+      disconnectAt: log.disconnectAt,
+      reconnectAt: null,
+      durationSeconds: null,
+      isCameraDisconnected: true,
+      resolved: false,
+      currentCount: malpracticeCount,
+    });
+
+    io.to(`candidate:${candidateId}`).emit('candidate:warning', {
+      violationType: 'CAMERA_DISCONNECTED',
+      message: '⚠️ Camera Disconnected! Reconnect your camera immediately. Timer is still running.',
+    });
+
+    io.to(`test:${testId}:admin`).emit('seatmap:status', {
+      candidateId,
+      roomId,
+      colorStatus: 'YELLOW',
+    });
+
+    res.json({ malpracticeLog: log });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /proctoring/camera-reconnected ──────────────────────────────────────
+const reportCameraReconnected = async (req, res, next) => {
+  try {
+    let { candidateId, testId, roomId, reconnectAt } = req.body;
+
+    if (!candidateId && req.user) {
+      candidateId = req.user.id;
+    }
+
+    if (req.user.type === 'candidate' && String(req.user.id) !== String(candidateId)) {
+      return res.status(403).json({ error: 'Cannot report violation for another candidate' });
+    }
+
+    if (!roomId && candidateId) {
+      const candidate = await Candidate.findById(candidateId).lean();
+      roomId = candidate?.currentRoomId;
+    }
+
+    if (!candidateId || !testId) {
+      return res.status(400).json({ error: 'candidateId and testId are required' });
+    }
+
+    const recDate = reconnectAt ? new Date(reconnectAt) : new Date();
+
+    const log = await MalpracticeLog.findOne({
+      candidateId,
+      testId,
+      violationType: 'CAMERA_DISCONNECTED',
+      reconnectAt: null,
+    }).sort({ disconnectAt: -1 });
+
+    if (log) {
+      const start = new Date(log.disconnectAt || log.detectedAt);
+      const durationSec = Math.max(1, Math.round((recDate.getTime() - start.getTime()) / 1000));
+      log.reconnectAt = recDate;
+      log.durationSeconds = durationSec;
+      log.resolved = true;
+      await log.save();
+
+      const candidate = await Candidate.findById(candidateId, 'name');
+      const malpracticeCount = await MalpracticeLog.countDocuments({ candidateId, testId });
+
+      const io = req.app.get('io');
+      io.to(`test:${testId}:admin`).emit('malpractice:alert', {
+        malpracticeLogId: log._id,
+        candidateId,
+        candidateName: candidate?.name || 'Unknown',
+        roomId,
+        violationType: 'CAMERA_DISCONNECTED',
+        disconnectAt: log.disconnectAt,
+        reconnectAt: log.reconnectAt,
+        durationSeconds: log.durationSeconds,
+        isCameraDisconnected: false,
+        resolved: true,
+        currentCount: malpracticeCount,
+      });
+
+      io.to(`test:${testId}:admin`).emit('seatmap:status', {
+        candidateId,
+        roomId,
+        colorStatus: 'GREEN',
+      });
+
+      return res.json({ malpracticeLog: log, resolved: true });
+    }
+
+    res.json({ message: 'No open camera disconnection found', resolved: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   submitFrame,
   reportViolation,
   reviewMalpractice,
   getCandidateMalpracticeLogs,
   getTestMalpracticeLogs,
+  reportCameraDisconnected,
+  reportCameraReconnected,
 };

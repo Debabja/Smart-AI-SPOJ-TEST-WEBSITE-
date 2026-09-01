@@ -210,10 +210,28 @@ const startAttempt = async (req, res, next) => {
     setTimeout(async () => {
       try {
         // Auto-submit all IN_PROGRESS submissions for this candidate/test
+        const autoNow = new Date();
         await Submission.updateMany(
           { candidateId, testId, status: 'IN_PROGRESS' },
-          { status: 'AUTO_SUBMITTED_TIME_UP', submittedAt: new Date() }
+          { status: 'AUTO_SUBMITTED_TIME_UP', submittedAt: autoNow }
         );
+
+        // Finalize any open CAMERA_DISCONNECTED malpractice logs
+        const MalpracticeLog = require('../models/MalpracticeLog');
+        const openLogs = await MalpracticeLog.find({
+          candidateId,
+          testId,
+          violationType: 'CAMERA_DISCONNECTED',
+          reconnectAt: null,
+        });
+        for (const openLog of openLogs) {
+          const start = new Date(openLog.disconnectAt || openLog.detectedAt);
+          openLog.reconnectAt = autoNow;
+          openLog.durationSeconds = Math.max(1, Math.round((autoNow.getTime() - start.getTime()) / 1000));
+          openLog.resolved = false;
+          await openLog.save();
+        }
+
         console.log(`[AutoSubmit] Candidate ${candidateId} test ${testId} auto-submitted at time-up`);
 
         // Trigger evaluation
@@ -394,10 +412,27 @@ const submitAll = async (req, res, next) => {
     const candidateId = req.user.id;
 
     // Mark all IN_PROGRESS submissions as submitted
+    const now = new Date();
     await Submission.updateMany(
       { candidateId, testId, status: 'IN_PROGRESS' },
-      { status: 'SUBMITTED', submittedAt: new Date() }
+      { status: 'SUBMITTED', submittedAt: now }
     );
+
+    // Finalize any open CAMERA_DISCONNECTED malpractice logs (camera never reconnected before test submission)
+    const MalpracticeLog = require('../models/MalpracticeLog');
+    const openLogs = await MalpracticeLog.find({
+      candidateId,
+      testId,
+      violationType: 'CAMERA_DISCONNECTED',
+      reconnectAt: null,
+    });
+    for (const openLog of openLogs) {
+      const start = new Date(openLog.disconnectAt || openLog.detectedAt);
+      openLog.reconnectAt = now;
+      openLog.durationSeconds = Math.max(1, Math.round((now.getTime() - start.getTime()) / 1000));
+      openLog.resolved = false;
+      await openLog.save();
+    }
 
     // Emit candidate:submitted to admin room (Section 10.2)
     const io = req.app.get('io');
