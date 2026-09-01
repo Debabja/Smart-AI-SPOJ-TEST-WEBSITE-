@@ -31,6 +31,11 @@ const registerSocketHandlers = (io) => {
   io.on('connection', (socket) => {
     console.log(`[Socket] Connected: ${socket.id} | User: ${socket.user?.id}`);
 
+    // Automatically join personal room for notifications (e.g. late join approval)
+    if (socket.user?.type === 'candidate' && socket.user?.id) {
+      socket.join(`candidate:${socket.user.id}`);
+    }
+
     // ── Client → Server: candidate:join ──────────────────────────────────────
     // Payload: { candidateId, testId, roomId }
     // Candidate socket joins test/room channel (Section 10.1)
@@ -103,6 +108,8 @@ const registerSocketHandlers = (io) => {
           status: candidate?.isDisqualified ? 'DISQUALIFIED' : 'IN_PROGRESS',
           questionsCompleted,
           timeRemaining,
+          candidateEndTime: sub?.candidateEndTime,
+          candidateStartTime: sub?.candidateStartTime,
         });
 
         // Section 10.2: seatmap:status — broadcast to admins

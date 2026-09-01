@@ -14,6 +14,9 @@ const AdminQuestionBank = lazy(() => import('./admin/pages/AdminQuestionBank'));
 const AdminLiveDashboard = lazy(() => import('./admin/pages/AdminLiveDashboard'));
 const AdminResults = lazy(() => import('./admin/pages/AdminResults'));
 const AdminCreateAdmin = lazy(() => import('./admin/pages/AdminCreateAdmin'));
+const AdminProfile = lazy(() => import('./admin/pages/AdminProfile'));
+const AdminSettings = lazy(() => import('./admin/pages/AdminSettings'));
+const AdminHelp = lazy(() => import('./admin/pages/AdminHelp'));
 
 // Candidate panel
 const CandidateRegister = lazy(() => import('./candidate/pages/CandidateRegister'));
@@ -72,6 +75,9 @@ function AppRoutes() {
           path="/admin/create-admin"
           element={<RequireSuperAdmin><AdminCreateAdmin /></RequireSuperAdmin>}
         />
+        <Route path="/admin/profile" element={<RequireAdmin><AdminProfile /></RequireAdmin>} />
+        <Route path="/admin/settings" element={<RequireAdmin><AdminSettings /></RequireAdmin>} />
+        <Route path="/admin/help" element={<RequireAdmin><AdminHelp /></RequireAdmin>} />
 
         {/* ── Candidate Routes ── */}
         <Route path="/candidate/register" element={<CandidateRegister />} />

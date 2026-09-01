@@ -127,6 +127,9 @@ export default function AdminTestDetail() {
       setStarting(true);
       const res = await api.startTest(testId);
       setTest(res.data.test);
+      // Immediately refresh rooms to reflect the newly started passwordValidUntil windows
+      const roomsRes = await api.getRooms(testId);
+      setRooms(roomsRes.data.rooms || []);
       toast.success('Test is now LIVE! Candidates can join with room codes.');
       setShowStartModal(false);
     } catch (err) {
@@ -533,8 +536,10 @@ export default function AdminTestDetail() {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 {rooms.map((room) => {
-                  const isExpired = new Date(room.passwordValidUntil) < new Date();
+                  const isLive = test?.status === 'LIVE';
+                  const isEnded = test?.status === 'ENDED';
                   const isClosed = room.status === 'CLOSED';
+                  const isExpired = isLive && room.passwordValidUntil && new Date(room.passwordValidUntil) < new Date();
 
                   return (
                     <div
@@ -563,7 +568,7 @@ export default function AdminTestDetail() {
                           >
                             {room.status}
                           </span>
-                          {isExpired && !isClosed && (
+                          {isLive && isExpired && !isClosed && (
                             <span className="badge badge-warning" style={{ fontSize: '0.7rem' }}>
                               Password Expired
                             </span>
@@ -621,17 +626,29 @@ export default function AdminTestDetail() {
                         </div>
                       </div>
 
-                      {/* Expiry Timestamp */}
+                      {/* Expiry Timestamp / Window Indicator (Requirement 3) */}
                       <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: 12 }}>
-                        Valid Until: {new Date(room.passwordValidUntil).toLocaleTimeString()} (
-                        {new Date(room.passwordValidUntil).toLocaleDateString()})
+                        {isLive && room.passwordValidUntil ? (
+                          <>
+                            Valid Until: {new Date(room.passwordValidUntil).toLocaleTimeString()} (
+                            {new Date(room.passwordValidUntil).toLocaleDateString()})
+                          </>
+                        ) : isEnded ? (
+                          <span>Test concluded</span>
+                        ) : (
+                          <span style={{ color: '#0E7C86', fontWeight: 600 }}>
+                            ⏳ Window starts when test goes LIVE
+                          </span>
+                        )}
                       </div>
 
                       {/* Action Bar */}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                         <button
                           onClick={() => {
-                            const details = `Globussoft Test: ${test.title}\nRoom: ${room.roomName}\nRoom Code: ${room.roomCode}\nPassword: ${room.roomPassword}\nValid Until: ${new Date(room.passwordValidUntil).toLocaleTimeString()}`;
+                            const details = isLive && room.passwordValidUntil
+                              ? `Globussoft Test: ${test.title}\nRoom: ${room.roomName}\nRoom Code: ${room.roomCode}\nPassword: ${room.roomPassword}\nValid Until: ${new Date(room.passwordValidUntil).toLocaleTimeString()}`
+                              : `Globussoft Test: ${test.title}\nRoom: ${room.roomName}\nRoom Code: ${room.roomCode}\nPassword: ${room.roomPassword}\nAccess Window: Starts when test goes LIVE (${test?.startTestWindowMinutes || 10} mins validity)`;
                             copyToClipboard(details, 'Room Invite Credentials');
                           }}
                           className="btn btn-secondary"
@@ -891,13 +908,37 @@ export default function AdminTestDetail() {
                           </td>
                           <td>
                             {c.isDisqualified || c.status === 'DISQUALIFIED' ? (
-                              <span className="badge badge-danger">🚫 Disqualified</span>
+                              <span
+                                className="badge badge-danger"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}
+                              >
+                                <span style={{ fontSize: '0.85em', lineHeight: 1, display: 'inline-flex', alignItems: 'center' }}>🚫</span>
+                                <span>Disqualified</span>
+                              </span>
                             ) : c.status === 'SUBMITTED' ? (
-                              <span className="badge badge-success">✓ Submitted</span>
+                              <span
+                                className="badge badge-success"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}
+                              >
+                                <span style={{ fontSize: '0.9em', lineHeight: 1, fontWeight: 700, display: 'inline-flex', alignItems: 'center' }}>✓</span>
+                                <span>Submitted</span>
+                              </span>
                             ) : c.status === 'AUTO_SUBMITTED_TIME_UP' ? (
-                              <span className="badge badge-teal">⏱ Auto-Submitted</span>
+                              <span
+                                className="badge badge-teal"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}
+                              >
+                                <span style={{ fontSize: '0.85em', lineHeight: 1, display: 'inline-flex', alignItems: 'center' }}>⏱</span>
+                                <span>Auto-Submitted</span>
+                              </span>
                             ) : (
-                              <span className="badge badge-primary">⏳ In Progress</span>
+                              <span
+                                className="badge badge-primary"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}
+                              >
+                                <span style={{ fontSize: '0.85em', lineHeight: 1, display: 'inline-flex', alignItems: 'center' }}>⏳</span>
+                                <span>In Progress</span>
+                              </span>
                             )}
                           </td>
                           <td style={{ color: '#6b7280', fontSize: '0.78rem' }}>

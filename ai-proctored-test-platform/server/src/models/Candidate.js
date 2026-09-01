@@ -11,6 +11,9 @@ const candidateSchema = new mongoose.Schema({
   // TTL index: index: { expires: 0 } means expire exactly AT expiresAt timestamp (Section 8.2 note)
   expiresAt: { type: Date, index: { expires: 0 } },
   isDisqualified: { type: Boolean, default: false },
+  lateJoinRequestedAt: { type: Date, default: null },
+  lateJoinRoomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', default: null },
+  manualJoinOverride: { type: Boolean, default: false },
 });
 
 // Section 8.3 — required indexes

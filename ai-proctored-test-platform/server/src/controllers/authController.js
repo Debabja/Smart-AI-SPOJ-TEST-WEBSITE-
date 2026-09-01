@@ -33,7 +33,7 @@ const adminLogin = async (req, res, next) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const admin = await Admin.findOne({ email: email.toLowerCase(), isActive: true });
+    const admin = await Admin.findOne({ email: email.toLowerCase() });
     if (!admin) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -41,6 +41,11 @@ const adminLogin = async (req, res, next) => {
     const isMatch = await bcrypt.compare(password, admin.passwordHash);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check if account has been deactivated (BUG-01)
+    if (admin.isActive === false) {
+      return res.status(401).json({ error: 'Account is deactivated' });
     }
 
     const payload = { id: admin._id.toString(), role: admin.role, type: 'admin' };

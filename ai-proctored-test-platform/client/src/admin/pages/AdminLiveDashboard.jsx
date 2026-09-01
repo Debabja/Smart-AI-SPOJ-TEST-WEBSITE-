@@ -15,6 +15,8 @@ import {
   onCandidateSubmitted, offCandidateSubmitted,
   onRoomUpdated, offRoomUpdated,
   onTestEnded, offTestEnded,
+  onLateJoinRequest, offLateJoinRequest,
+  onLateJoinProcessed, offLateJoinProcessed,
 } from '../../services/socketClient';
 
 // Exact Section 14 colors
@@ -25,11 +27,47 @@ const STATUS_COLORS = {
   WHITE: '#e5e7eb',
 };
 
+// ── Candidate Session Remaining Time Helper (Pure client-side countdown) ──────
+const getCandidateRemainingMs = (candidate, currentNow) => {
+  if (!candidate) return 0;
+  if (candidate.status === 'SUBMITTED' || candidate.status === 'AUTO_SUBMITTED_TIME_UP') {
+    return 0;
+  }
+  if (candidate.candidateEndTime) {
+    return Math.max(0, new Date(candidate.candidateEndTime).getTime() - currentNow);
+  }
+  if (typeof candidate.timeRemaining === 'number') {
+    const elapsed = candidate.lastSyncedAt ? Math.max(0, currentNow - candidate.lastSyncedAt) : 0;
+    return Math.max(0, candidate.timeRemaining - elapsed);
+  }
+  return 0;
+};
+
 // ── Memoized Seat Tile (FR-7.3: Persistent Malpractice counter beside name) ────
-const SeatTile = memo(({ candidate, roomName, onClick }) => {
+const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
   const color = STATUS_COLORS[candidate.colorStatus] || STATUS_COLORS.WHITE;
   const isWhite = candidate.colorStatus === 'WHITE' || !candidate.colorStatus;
   const malpracticeCount = candidate.malpracticeCount || 0;
+
+  const remainingMs = getCandidateRemainingMs(candidate, now);
+  const formattedTimer = useMemo(() => {
+    if (candidate.status === 'SUBMITTED' || candidate.status === 'AUTO_SUBMITTED_TIME_UP') {
+      return 'Submitted';
+    }
+    if (candidate.status === 'DISQUALIFIED') {
+      return 'Disqualified';
+    }
+    if (!candidate.candidateStartTime && (candidate.colorStatus === 'WHITE' || !candidate.colorStatus)) {
+      return 'Not started';
+    }
+    if (remainingMs <= 0) {
+      return 'Time up';
+    }
+    const totalSec = Math.floor(remainingMs / 1000);
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    return `${mins}m ${secs < 10 ? '0' : ''}${secs}s left`;
+  }, [candidate.status, candidate.candidateStartTime, candidate.colorStatus, remainingMs]);
 
   return (
     <div
@@ -108,12 +146,10 @@ const SeatTile = memo(({ candidate, roomName, onClick }) => {
         </div>
       </div>
 
-      {/* Bottom Footer: Timer */}
+      {/* Bottom Footer: Live Countdown Timer (Requirement 2d) */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', marginTop: 4 }}>
         <span style={{ color: '#4b5563', fontFamily: 'monospace', fontWeight: 600 }}>
-          {candidate.timeRemaining !== undefined
-            ? `${Math.floor(candidate.timeRemaining / 60000)}m left`
-            : '—'}
+          {formattedTimer}
         </span>
 
         <span
@@ -132,9 +168,29 @@ const SeatTile = memo(({ candidate, roomName, onClick }) => {
 });
 
 // ── Memoized Table Row Component (FR-7.3: Persistent Malpractice counter beside name) ──
-const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqualify, style }) => {
+const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqualify, style, now }) => {
   const color = STATUS_COLORS[candidate.colorStatus] || STATUS_COLORS.WHITE;
   const malpracticeCount = candidate.malpracticeCount || 0;
+
+  const remainingMs = getCandidateRemainingMs(candidate, now);
+  const formattedTimer = useMemo(() => {
+    if (candidate.status === 'SUBMITTED' || candidate.status === 'AUTO_SUBMITTED_TIME_UP') {
+      return 'Submitted';
+    }
+    if (candidate.status === 'DISQUALIFIED') {
+      return 'Disqualified';
+    }
+    if (!candidate.candidateStartTime && (candidate.colorStatus === 'WHITE' || !candidate.colorStatus)) {
+      return 'Not started';
+    }
+    if (remainingMs <= 0) {
+      return '00m 00s (Time up)';
+    }
+    const totalSec = Math.floor(remainingMs / 1000);
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    return `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+  }, [candidate.status, candidate.candidateStartTime, candidate.colorStatus, remainingMs]);
 
   return (
     <div
@@ -228,10 +284,9 @@ const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqua
         )}
       </div>
 
+      {/* Live countdown timer for roster (Requirement 2d) */}
       <div style={{ color: '#6b7280', fontFamily: 'monospace', fontSize: '0.8rem' }}>
-        {candidate.timeRemaining !== undefined
-          ? `${Math.floor(candidate.timeRemaining / 60000)}m ${Math.floor((candidate.timeRemaining % 60000) / 1000)}s`
-          : '—'}
+        {formattedTimer}
       </div>
 
       <div style={{ textAlign: 'right', display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
@@ -284,6 +339,9 @@ export default function AdminLiveDashboard() {
   // Candidate Data Store: candidateId -> candidateObj
   const [candidatesMap, setCandidatesMap] = useState({});
 
+  // Late Join Requests Queue (Requirements 4 & 5)
+  const [lateJoinRequests, setLateJoinRequests] = useState([]);
+
   // Live Alerts Queue (FR-7.3)
   const [activeAlert, setActiveAlert] = useState(null);
   const [alertQueue, setAlertQueue] = useState([]);
@@ -324,16 +382,30 @@ export default function AdminLiveDashboard() {
     const fetchInitialData = async () => {
       try {
         setLoading(true);
-        const [testRes, roomsRes, liveRes] = await Promise.all([
+        const [testRes, roomsRes, liveRes, lateJoinRes] = await Promise.all([
           api.getTest(testId),
           api.getRooms(testId),
           api.getLiveCandidates(testId).catch(() => ({ data: { candidates: {} } })),
+          api.getPendingLateJoins(testId).catch(() => ({ data: { requests: [] } })),
         ]);
         if (!isMounted) return;
         setTest(testRes.data.test);
         setRooms(roomsRes.data.rooms || []);
         if (liveRes.data?.candidates) {
-          setCandidatesMap(liveRes.data.candidates);
+          const initialMap = {};
+          const initialNow = Date.now();
+          for (const [cid, cand] of Object.entries(liveRes.data.candidates)) {
+            initialMap[cid] = {
+              ...cand,
+              candidateEndTime: cand.candidateEndTime || (cand.timeRemaining ? new Date(initialNow + cand.timeRemaining).toISOString() : null),
+              candidateStartTime: cand.candidateStartTime || null,
+              lastSyncedAt: initialNow,
+            };
+          }
+          setCandidatesMap(initialMap);
+        }
+        if (lateJoinRes.data?.requests) {
+          setLateJoinRequests(lateJoinRes.data.requests);
         }
       } catch (err) {
         toast.error(err.response?.data?.error || 'Failed to initialize live dashboard');
@@ -352,11 +424,17 @@ export default function AdminLiveDashboard() {
 
     setCandidatesMap((prev) => {
       const updated = { ...prev };
+      const currentNow = Date.now();
       for (const [cid, data] of Object.entries(debounceBufferRef.current)) {
+        const existing = updated[cid] || {};
+        const endTime = data.candidateEndTime || existing.candidateEndTime || (data.timeRemaining ? new Date(currentNow + data.timeRemaining).toISOString() : null);
         updated[cid] = {
-          ...(updated[cid] || {}),
+          ...existing,
           ...data,
           candidateId: cid,
+          candidateEndTime: endTime,
+          candidateStartTime: data.candidateStartTime || existing.candidateStartTime || null,
+          lastSyncedAt: currentNow,
         };
       }
       return updated;
@@ -455,6 +533,23 @@ export default function AdminLiveDashboard() {
     const handleCandidateSubmitted = (subData) => {
       toast.success(`🎉 ${subData.candidateName || 'A candidate'} just submitted!`);
       announceCandidateSubmission(subData.candidateName || 'A candidate');
+
+      if (subData.candidateId) {
+        setCandidatesMap((prev) => {
+          const current = prev[subData.candidateId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [subData.candidateId]: {
+              ...current,
+              status: 'SUBMITTED',
+              colorStatus: 'GREEN',
+              timeRemaining: 0,
+              candidateEndTime: new Date().toISOString(),
+            },
+          };
+        });
+      }
     };
 
     // Section 10.2: room:updated
@@ -468,12 +563,65 @@ export default function AdminLiveDashboard() {
       setTest((t) => (t ? { ...t, status: 'ENDED' } : t));
     };
 
+    // Section 10.2: late join request (Requirements 4 & 5)
+    const handleLateJoinReq = (reqData) => {
+      // Requirement 5: De-duplicate by candidateId
+      setLateJoinRequests((prev) => {
+        if (prev.some((r) => r.candidateId === reqData.candidateId)) {
+          return prev;
+        }
+        return [...prev, reqData];
+      });
+
+      toast(
+        (t) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 260 }}>
+            <div style={{ fontWeight: 700, color: '#1A2B3C' }}>
+              📢 Late Join Request
+            </div>
+            <div style={{ fontSize: '0.85rem', color: '#4b5563' }}>
+              <strong>{reqData.candidateName}</strong> wants to join <strong>{reqData.roomName || reqData.roomCode}</strong>.
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+              <button
+                className="btn btn-sm btn-success"
+                style={{ padding: '4px 10px', fontSize: '0.75rem', fontWeight: 600 }}
+                onClick={async () => {
+                  toast.dismiss(t.id);
+                  await handleAllowLateEntry(reqData.roomId, reqData.candidateId);
+                }}
+              >
+                ✓ Allow Entry
+              </button>
+              <button
+                className="btn btn-sm btn-danger"
+                style={{ padding: '4px 10px', fontSize: '0.75rem', fontWeight: 600 }}
+                onClick={async () => {
+                  toast.dismiss(t.id);
+                  await handleDismissLateJoin(reqData.roomId, reqData.candidateId);
+                }}
+              >
+                ✕ Dismiss
+              </button>
+            </div>
+          </div>
+        ),
+        { duration: 15000, id: `late-join-toast-${reqData.candidateId}` }
+      );
+    };
+
+    const handleLateJoinProc = (procData) => {
+      setLateJoinRequests((prev) => prev.filter((r) => r.candidateId !== procData.candidateId));
+    };
+
     onDashboardUpdate(handleDashboardUpdate);
     onSeatmapStatus(handleSeatmapStatus);
     onMalpracticeAlert(handleMalpracticeAlert);
     onCandidateSubmitted(handleCandidateSubmitted);
     onRoomUpdated(handleRoomUpdated);
     onTestEnded(handleTestEnded);
+    onLateJoinRequest(handleLateJoinReq);
+    onLateJoinProcessed(handleLateJoinProc);
 
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
@@ -483,8 +631,32 @@ export default function AdminLiveDashboard() {
       offCandidateSubmitted(handleCandidateSubmitted);
       offRoomUpdated(handleRoomUpdated);
       offTestEnded(handleTestEnded);
+      offLateJoinRequest(handleLateJoinReq);
+      offLateJoinProcessed(handleLateJoinProc);
     };
   }, [testId, user?.id, flushDebounceBuffer, announceCandidateSubmission]);
+
+  // Handle Allow Late Entry (Requirement 4)
+  const handleAllowLateEntry = async (roomId, candidateId) => {
+    try {
+      await api.allowLateJoin(roomId, candidateId);
+      setLateJoinRequests((prev) => prev.filter((r) => r.candidateId !== candidateId));
+      toast.success('Late entry approved. Candidate can now enter the room.');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to allow late entry');
+    }
+  };
+
+  // Handle Dismiss Late Join (Requirement 4)
+  const handleDismissLateJoin = async (roomId, candidateId) => {
+    try {
+      await api.dismissLateJoin(roomId, candidateId);
+      setLateJoinRequests((prev) => prev.filter((r) => r.candidateId !== candidateId));
+      toast('Late join request dismissed.', { icon: '🗑️' });
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to dismiss request');
+    }
+  };
 
   // Manage Active Alert Popup from Queue
   useEffect(() => {
@@ -591,33 +763,45 @@ export default function AdminLiveDashboard() {
   }, [candidatesMap]);
 
   // Aggregate / Tentative Timer Calculation (for all active candidates)
-  const [ticker, setTicker] = useState(0);
+  const [now, setNow] = useState(Date.now());
 
-  // 1-second ticker for smooth timer countdown
+  // 1-second client-side ticker for smooth countdown (Requirement 2c)
   useEffect(() => {
     const interval = setInterval(() => {
-      setTicker((t) => t + 1);
+      setNow(Date.now());
     }, 1000);
     return () => clearInterval(interval);
   }, []);
 
   const tentativeTimer = useMemo(() => {
-    if (!test) return { formatted: '—', avgMinutes: 0, maxMinutes: 0, activeCount: 0 };
+    if (!test) return { formatted: '--:--', avgMinutes: 0, maxMinutes: 0, activeCount: 0 };
     if (test.status === 'ENDED') {
       return { formatted: '00:00 (Concluded)', avgMinutes: 0, maxMinutes: 0, activeCount: 0 };
     }
 
-    const activeTimes = Object.values(candidatesMap)
-      .map((c) => c.timeRemaining)
-      .filter((t) => typeof t === 'number' && t > 0);
+    // Active candidates in current view (matching selectedRoomId)
+    const activeCandidatesInView = Object.values(candidatesMap).filter((c) => {
+      const cRoomId = typeof c.roomId === 'object' ? (c.roomId?._id || c.roomId?.id) : c.roomId;
+      const matchesRoom = selectedRoomId === 'ALL' || String(cRoomId) === String(selectedRoomId);
+      if (!matchesRoom) return false;
 
+      // Finished or disqualified candidates are not active in session
+      if (c.status === 'SUBMITTED' || c.status === 'AUTO_SUBMITTED_TIME_UP' || c.status === 'DISQUALIFIED') {
+        return false;
+      }
+
+      const remaining = getCandidateRemainingMs(c, now);
+      return remaining > 0;
+    });
+
+    const activeTimes = activeCandidatesInView.map((c) => getCandidateRemainingMs(c, now));
+
+    // Requirement 2b: If 0 connected/active candidates, display neutral state "--:--" instead of misleading "60m 00s"
     if (activeTimes.length === 0) {
-      const defaultDurationMs = (test.durationMinutes || 60) * 60 * 1000;
-      const m = Math.floor(defaultDurationMs / 60000);
       return {
-        formatted: `${m}m 00s`,
-        avgMinutes: m,
-        maxMinutes: m,
+        formatted: '--:--',
+        avgMinutes: 0,
+        maxMinutes: 0,
         activeCount: 0,
       };
     }
@@ -627,9 +811,14 @@ export default function AdminLiveDashboard() {
 
     const formatMs = (ms) => {
       const totalSec = Math.max(0, Math.floor(ms / 1000));
-      const mins = Math.floor(totalSec / 60);
+      const hours = Math.floor(totalSec / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
       const secs = totalSec % 60;
-      return `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+      const secStr = secs < 10 ? `0${secs}` : `${secs}`;
+      if (hours > 0) {
+        return `${hours}h ${mins < 10 ? '0' : ''}${mins}m ${secStr}s`;
+      }
+      return `${mins}m ${secStr}s`;
     };
 
     return {
@@ -639,7 +828,7 @@ export default function AdminLiveDashboard() {
       maxMinutes: Math.floor(maxMs / 60000),
       activeCount: activeTimes.length,
     };
-  }, [candidatesMap, test, ticker]);
+  }, [candidatesMap, selectedRoomId, test, now]);
 
   // Section 13 NFR Virtualized Row Renderer for >50 items
   const VirtualizedRow = useCallback(({ index, style }) => {
@@ -653,9 +842,10 @@ export default function AdminLiveDashboard() {
         onWarn={handleManualWarn}
         onDisqualify={handleManualDisqualify}
         style={style}
+        now={now}
       />
     );
-  }, [candidateList, roomsById]);
+  }, [candidateList, roomsById, now]);
 
   if (loading) {
     return (
@@ -726,7 +916,7 @@ export default function AdminLiveDashboard() {
                     <div style={{ fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94A3B8', fontWeight: 700 }}>
                       Avg Session Timer
                     </div>
-                    <div style={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 800, color: '#38BDF8', letterSpacing: '0.03em', lineHeight: 1.1 }}>
+                    <div style={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 800, color: tentativeTimer.activeCount > 0 ? '#38BDF8' : '#94A3B8', letterSpacing: '0.03em', lineHeight: 1.1 }}>
                       {tentativeTimer.formatted}
                     </div>
                   </div>
@@ -776,6 +966,84 @@ export default function AdminLiveDashboard() {
           </div>
         </div>
 
+        {/* ── Pending Late-Join Requests Banner (Requirements 4 & 5) ── */}
+        {lateJoinRequests.length > 0 && (
+          <div
+            className="card"
+            style={{
+              marginBottom: 20,
+              padding: '16px 20px',
+              border: '1.5px solid #F59E0B',
+              background: '#FFFBEB',
+              borderRadius: '12px',
+              boxShadow: '0 4px 12px rgba(245, 158, 11, 0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: '1.3rem' }}>🔔</span>
+                <div>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#92400E', margin: 0 }}>
+                    Late Join Requests ({lateJoinRequests.length})
+                  </h3>
+                  <p style={{ fontSize: '0.8rem', color: '#B45309', margin: 0 }}>
+                    The following candidates are requesting entry after the room access window closed.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {lateJoinRequests.map((req) => (
+                <div
+                  key={req.candidateId}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                    background: '#FFFFFF',
+                    padding: '12px 16px',
+                    borderRadius: '8px',
+                    border: '1px solid #FDE68A',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, color: '#1A2B3C', fontSize: '0.95rem' }}>
+                      {req.candidateName}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: '#6B7280' }}>
+                      {req.candidateEmail} {req.candidatePhone ? `· ${req.candidatePhone}` : ''}
+                      {' · '}Target: <strong>{req.roomName || req.roomCode}</strong>
+                      {req.requestedAt && (
+                        <span> · {new Date(req.requestedAt).toLocaleTimeString()}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      className="btn btn-sm btn-success"
+                      onClick={() => handleAllowLateEntry(req.roomId, req.candidateId)}
+                      style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      ✓ Allow Entry
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => handleDismissLateJoin(req.roomId, req.candidateId)}
+                      style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      ✕ Dismiss
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* ── Real-Time Metrics Bar ── */}
         <div className="stats-grid" style={{ marginBottom: 24, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
           <div className="stat-card">
@@ -783,10 +1051,12 @@ export default function AdminLiveDashboard() {
             <div className="stat-label">Active Candidates</div>
           </div>
           <div className="stat-card" style={{ borderLeft: '4px solid #0EA5E9' }}>
-            <div className="stat-value" style={{ color: '#0284c7', fontFamily: 'monospace', fontSize: '1.4rem' }}>
+            <div className="stat-value" style={{ color: tentativeTimer.activeCount > 0 ? '#0284c7' : '#9ca3af', fontFamily: 'monospace', fontSize: '1.4rem' }}>
               {tentativeTimer.formatted}
             </div>
-            <div className="stat-label">Avg Session Timer</div>
+            <div className="stat-label">
+              {tentativeTimer.activeCount > 0 ? `Avg Session Timer (${tentativeTimer.activeCount} active)` : 'Avg Session Timer'}
+            </div>
           </div>
           <div className="stat-card" style={{ borderLeft: `4px solid ${STATUS_COLORS.GREEN}` }}>
             <div className="stat-value" style={{ color: STATUS_COLORS.GREEN }}>{stats.green}</div>
@@ -860,6 +1130,7 @@ export default function AdminLiveDashboard() {
                   candidate={c}
                   roomName={roomsById[c.roomId] || 'Room'}
                   onClick={setInspectCandidate}
+                  now={now}
                 />
               ))}
             </div>
@@ -949,6 +1220,7 @@ export default function AdminLiveDashboard() {
                   onSelect={setInspectCandidate}
                   onWarn={handleManualWarn}
                   onDisqualify={handleManualDisqualify}
+                  now={now}
                 />
               ))}
             </div>

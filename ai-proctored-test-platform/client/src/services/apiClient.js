@@ -58,6 +58,19 @@ export const api = {
   candidateLogin: (data) => axios.post('/auth/candidate/login', data),
   logout: () => axios.post('/auth/logout'),
 
+  // Profile (Any Admin - BUG-04)
+  getMyProfile: () => axios.get('/admins/me'),
+  updateMyProfile: (data) => axios.patch('/admins/me', data),
+  updateMyPassword: (data) => axios.patch('/admins/me/password', data),
+
+  // Admin Management (Super Admin only - BUG-01)
+  getAdmins: (params) => axios.get('/admins', { params }),
+  getAdmin: (id) => axios.get(`/admins/${id}`),
+  updateAdmin: (id, data) => axios.patch(`/admins/${id}`, data),
+  deactivateAdmin: (id) => axios.patch(`/admins/${id}/deactivate`),
+  activateAdmin: (id) => axios.patch(`/admins/${id}/activate`),
+  deleteAdmin: (id) => axios.delete(`/admins/${id}`),
+
   // Tests
   createTest: (data) => axios.post('/tests', data),
   getTests: () => axios.get('/tests'),
@@ -75,6 +88,11 @@ export const api = {
   getLiveCandidates: (testId) => axios.get(`/tests/${testId}/live-candidates`),
   deleteRoom: (roomId) => axios.delete(`/rooms/${roomId}`),
   getRoomCandidates: (roomId) => axios.get(`/rooms/${roomId}/candidates`),
+  requestLateJoin: (roomId, candidateId) => axios.post(`/rooms/${roomId}/candidates/${candidateId}/late-join-request`),
+  allowLateJoin: (roomId, candidateId) => axios.post(`/rooms/${roomId}/candidates/${candidateId}/allow-late-entry`),
+  dismissLateJoin: (roomId, candidateId) => axios.post(`/rooms/${roomId}/candidates/${candidateId}/dismiss-late-join`),
+  getLateJoinStatus: (candidateId) => axios.get(`/candidates/${candidateId}/late-join-status`),
+  getPendingLateJoins: (testId) => axios.get(`/tests/${testId}/pending-late-joins`),
 
   // Question Sets
   createQuestionSet: (data) => axios.post('/question-sets', data),

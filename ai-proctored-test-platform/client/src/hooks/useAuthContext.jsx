@@ -45,12 +45,21 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   }, []);
 
+  const updateUser = useCallback((updatedFields) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev, ...updatedFields };
+      localStorage.setItem('user', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
   const isAdmin = user?.type === 'admin';
   const isSuperAdmin = user?.type === 'admin' && user?.role === 'SUPER_ADMIN';
   const isCandidate = user?.type === 'candidate';
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout, isAdmin, isSuperAdmin, isCandidate }}>
+    <AuthContext.Provider value={{ user, token, loading, login, logout, updateUser, isAdmin, isSuperAdmin, isCandidate }}>
       {children}
     </AuthContext.Provider>
   );

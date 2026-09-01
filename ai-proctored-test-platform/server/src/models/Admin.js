@@ -7,6 +7,7 @@ const adminSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true },
     passwordHash: { type: String, required: true },
     role: { type: String, enum: ['SUPER_ADMIN', 'ADMIN'], required: true },
+    phone: { type: String, default: null },
     // null for the first super admin (Section 8.2)
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null },
     isActive: { type: Boolean, default: true },

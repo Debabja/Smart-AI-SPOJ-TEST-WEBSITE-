@@ -18,6 +18,7 @@ import { useAuth } from '../../hooks/useAuthContext';
 import { useProctoring } from '../../hooks/useProctoring';
 import DraggableWebcamPip from '../../shared/DraggableWebcamPip';
 import Editor from '@monaco-editor/react';
+import globussoftLogo from '../../assets/globussoft-logo.png';
 
 // Default starter project templates if question doesn't have custom starter files
 const DEFAULT_FILES = {
@@ -394,12 +395,11 @@ export default function CandidateAITestScreen() {
         {/* Row (a): Test Name & Room ID Badge */}
         <div className="test-header-top-row">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{
-              background: '#0E7C86', borderRadius: '50%', width: 28, height: 28,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem'
-            }}>
-              🤖
-            </div>
+            <img
+              src={globussoftLogo}
+              alt="Globussoft Technology"
+              style={{ height: 28, width: 'auto', objectFit: 'contain', display: 'block' }}
+            />
             <span style={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', letterSpacing: '0.01em' }}>
               {session.test.title} <span style={{ color: '#38bdf8', fontSize: '0.85rem', fontWeight: 600 }}>(AI Test)</span>
             </span>

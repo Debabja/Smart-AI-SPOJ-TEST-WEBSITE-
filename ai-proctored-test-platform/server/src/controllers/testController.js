@@ -1,6 +1,7 @@
 // Test Controller — Module 2
 // Implements all endpoints from Section 9.2 exactly
 const Test = require('../models/Test');
+const Room = require('../models/Room');
 const shortlistService = require('../services/shortlistService');
 
 // ── POST /tests ───────────────────────────────────────────────────────────────
@@ -168,9 +169,22 @@ const startTest = async (req, res, next) => {
     );
     if (!test) return res.status(404).json({ error: 'Test not found' });
 
+    // Set / refresh passwordValidUntil = now + Test.startTestWindowMinutes for all rooms under this test
+    const now = new Date();
+    const passwordValidUntil = new Date(
+      now.getTime() + (test.startTestWindowMinutes || 10) * 60 * 1000
+    );
+    await Room.updateMany(
+      { testId: test._id },
+      { $set: { passwordValidUntil, status: 'ACTIVE' } }
+    );
+
     // Broadcast to all admins watching this test
     const io = req.app.get('io');
-    io.to(`test:${test._id}:admin`).emit('test:started', { testId: test._id, status: 'LIVE' });
+    if (io) {
+      io.to(`test:${test._id}:admin`).emit('test:started', { testId: test._id, status: 'LIVE' });
+      io.to(`test:${test._id}:admin`).emit('room:updated', { testId: test._id, action: 'PASSWORD_WINDOW_STARTED' });
+    }
 
     res.json({ test });
   } catch (err) {

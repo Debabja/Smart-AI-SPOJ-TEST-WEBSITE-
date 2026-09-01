@@ -4,6 +4,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuthContext';
 import api from '../../services/apiClient';
 import toast from 'react-hot-toast';
+import globussoftLogo from '../../assets/globussoft-logo.png';
+import PasswordInput from '../../shared/PasswordInput';
 
 export default function CandidateRegister() {
   const { login } = useAuth();
@@ -47,11 +49,11 @@ export default function CandidateRegister() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-logo">
-          <div className="auth-logo-icon">🌐</div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#1A2B3C' }}>Globussoft Technology</div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Technology Ahead of Time</div>
-          </div>
+          <img
+            src={globussoftLogo}
+            alt="Globussoft Technology"
+            style={{ height: 46, width: 'auto', objectFit: 'contain', display: 'block' }}
+          />
         </div>
 
         <h1 className="auth-title">Create Account</h1>
@@ -106,11 +108,9 @@ export default function CandidateRegister() {
 
           <div className="form-group">
             <label className="form-label" htmlFor="password">Password</label>
-            <input
+            <PasswordInput
               id="password"
               name="password"
-              type="password"
-              className="form-input"
               value={form.password}
               onChange={handleChange}
               placeholder="Create a strong password"
@@ -122,11 +122,9 @@ export default function CandidateRegister() {
 
           <div className="form-group">
             <label className="form-label" htmlFor="confirmPassword">Confirm Password</label>
-            <input
+            <PasswordInput
               id="confirmPassword"
               name="confirmPassword"
-              type="password"
-              className="form-input"
               value={form.confirmPassword}
               onChange={handleChange}
               placeholder="Repeat your password"

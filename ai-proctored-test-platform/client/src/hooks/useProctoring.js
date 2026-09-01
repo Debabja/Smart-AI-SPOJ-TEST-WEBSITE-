@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { FilesetResolver, FaceDetector } from '@mediapipe/tasks-vision';
 import api from '../services/apiClient';
 import { emitTabSwitch, emitFullscreenExit } from '../services/socketClient';
+import { getScreenStream } from '../services/screenStreamManager';
 
 /**
  * Custom hook for full client-side proctoring:
@@ -14,6 +15,7 @@ import { emitTabSwitch, emitFullscreenExit } from '../services/socketClient';
  * 4. Fullscreen lock & exit detection (FR-5.2, FR-5.3)
  * 5. Tab switch / blur detection (FR-5.3)
  * 6. Copy-paste / right-click prevention (FR-5.4)
+ * 7. Live screen-share capture for TAB_SWITCH and FULLSCREEN_EXIT proof (BUG-13)
  */
 export function useProctoring({
   testId,
@@ -25,6 +27,7 @@ export function useProctoring({
   onDisqualified,
 }) {
   const videoRef = useRef(null);
+  const screenVideoRef = useRef(null);
   const streamRef = useRef(null);
   const faceDetectorRef = useRef(null);
 
@@ -47,6 +50,45 @@ export function useProctoring({
   // ── Helper: Capture Real-time Proof Screenshot for any Violation ──────────────
   const captureViolationProof = useCallback((violationType) => {
     try {
+      // ASSUMPTION: 'TAB_SWITCH', 'FULLSCREEN_EXIT', and 'OTHER' capture candidate's monitor/screen display evidence.
+      // Physical presence violations ('PHONE_DETECTED', 'MULTIPLE_FACES', 'NO_FACE_15MIN') capture webcam frames.
+      const isScreenViolation =
+        violationType === 'TAB_SWITCH' ||
+        violationType === 'FULLSCREEN_EXIT' ||
+        violationType === 'OTHER';
+
+      // 1. Screen Monitor Capture for TAB_SWITCH, FULLSCREEN_EXIT, and OTHER (BUG-13)
+      if (isScreenViolation && screenVideoRef.current && screenVideoRef.current.readyState >= 2) {
+        const sw = screenVideoRef.current.videoWidth || 1280;
+        const sh = screenVideoRef.current.videoHeight || 720;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = sw;
+        canvas.height = sh;
+        const ctx = canvas.getContext('2d');
+
+        // Draw live screen capture frame (captures active monitor / tab)
+        ctx.drawImage(screenVideoRef.current, 0, 0, sw, sh);
+
+        // Overlay proctoring violation watermark header
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+        ctx.fillRect(0, 0, sw, 44);
+
+        ctx.fillStyle = '#EF4444';
+        ctx.font = 'bold 15px sans-serif';
+        ctx.fillText(`⚠️ PROCTORING EVIDENCE: ${violationType.replace(/_/g, ' ')} (SCREEN CAPTURE)`, 16, 28);
+
+        // Timestamp & metadata footer
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.fillRect(0, sh - 30, sw, 30);
+        ctx.fillStyle = '#E2E8F0';
+        ctx.font = '12px monospace';
+        ctx.fillText(`Time: ${new Date().toLocaleTimeString()} · ${new Date().toLocaleDateString()} | Candidate: ${candidateId} | Screen Monitor Capture`, 16, sh - 10);
+
+        return canvas.toDataURL('image/jpeg', 0.85);
+      }
+
+      // 2. Webcam Capture for PHONE_DETECTED, MULTIPLE_FACES, NO_FACE_15MIN (or fallback)
       if (videoRef.current && videoRef.current.readyState >= 2) {
         const vw = videoRef.current.videoWidth || 640;
         const vh = videoRef.current.videoHeight || 480;
@@ -56,10 +98,10 @@ export function useProctoring({
         canvas.height = vh;
         const ctx = canvas.getContext('2d');
 
-        // 1. Draw live webcam frame
+        // Draw live webcam frame
         ctx.drawImage(videoRef.current, 0, 0, vw, vh);
 
-        // 2. Overlay proctoring violation watermark header
+        // Overlay proctoring violation watermark header
         ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
         ctx.fillRect(0, 0, vw, 40);
 
@@ -99,6 +141,16 @@ export function useProctoring({
       return null;
     }
   }, [candidateId, testId, roomId]);
+
+  // ── Helper: Capture Webcam Screenshot ───────────────────────────────────────
+  const captureWebcamScreenshot = useCallback((violationType = 'CAMERA_CAPTURE') => {
+    return captureViolationProof(violationType);
+  }, [captureViolationProof]);
+
+  // ── Helper: Capture Screen Snapshot ─────────────────────────────────────────
+  const captureScreenSnapshot = useCallback(() => {
+    return captureViolationProof('SCREEN_SNAPSHOT');
+  }, [captureViolationProof]);
 
   // ── Helper: Report Violation with Debounce ──────────────────────────────────
   const reportViolation = useCallback(async (violationType, screenshotBase64) => {
@@ -321,6 +373,41 @@ export function useProctoring({
 
     return () => clearInterval(frameInterval);
   }, [enabled, isMediaReady, testId]);
+
+  // ── 3.5. Screen Sharing Stream & Termination Monitor (BUG-13) ───────────────
+  useEffect(() => {
+    if (!enabled) return;
+
+    const stream = getScreenStream();
+    if (stream && stream.active) {
+      const video = document.createElement('video');
+      video.autoplay = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      video.play().catch((err) => console.debug('[Proctoring] Screen stream play caught:', err.message));
+      screenVideoRef.current = video;
+
+      // Detect mid-test screen share revocation (Requirement 4)
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        track.onended = () => {
+          // ASSUMPTION: If candidate stops screen sharing mid-test via browser UI ("Stop sharing"), treat as FULLSCREEN_EXIT violation and warn candidate.
+          console.warn('[Proctoring] Screen share stream was stopped mid-test!');
+          toast.error('⚠️ Screen sharing was disconnected! Continuous screen sharing is mandatory.', { duration: 8000 });
+          const proof = captureViolationProof('FULLSCREEN_EXIT');
+          reportViolation('FULLSCREEN_EXIT', proof);
+        };
+      }
+    }
+
+    return () => {
+      if (screenVideoRef.current) {
+        screenVideoRef.current.srcObject = null;
+        screenVideoRef.current = null;
+      }
+    };
+  }, [enabled, captureViolationProof, reportViolation]);
 
   // ── 4. Fullscreen Enforcement & Exit Detection (FR-5.2, FR-5.3) ─────────────
   useEffect(() => {

@@ -16,6 +16,7 @@ const aiTestRoutes = require('./routes/aiTestRoutes');
 const proctoringRoutes = require('./routes/proctoringRoutes');
 const evaluationRoutes = require('./routes/evaluationRoutes');
 const malpracticeRoutes = require('./routes/malpracticeRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 const { registerSocketHandlers } = require('./sockets/socketHandler');
 
@@ -49,12 +50,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1', testRoutes);
 app.use('/api/v1', roomRoutes);
+app.use('/api', roomRoutes);
 app.use('/api/v1', questionRoutes);
 app.use('/api/v1', submissionRoutes);
 app.use('/api/v1', aiTestRoutes);
 app.use('/api/v1/proctoring', proctoringRoutes);
 app.use('/api/v1', evaluationRoutes);
 app.use('/api/v1', malpracticeRoutes);
+app.use('/api/v1', adminRoutes);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));

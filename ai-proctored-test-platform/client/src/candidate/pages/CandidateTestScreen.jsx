@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../../hooks/useAuthContext';
 import { useProctoring } from '../../hooks/useProctoring';
 import DraggableWebcamPip from '../../shared/DraggableWebcamPip';
+import globussoftLogo from '../../assets/globussoft-logo.png';
 
 // ── Monaco Editor (lazy-loaded to avoid bundle bloat) ─────────────────────────
 import Editor from '@monaco-editor/react';
@@ -26,25 +27,88 @@ const LANGUAGE_MAP = {
   javascript: 'javascript', react: 'javascript',
 };
 
-// ── Memoized question list item (NFR: React.memo for 60fps list updates) ──────
-const QuestionTab = memo(({ question, index, isActive, visiblePassed, visibleTotal, onClick }) => {
+// ── Memoized question list item (NFR: React.memo for 60fps list updates, supports collapsed view) ──────
+const QuestionTab = memo(({ question, index, isActive, visiblePassed, visibleTotal, isSubmitted, isCollapsed, onClick }) => {
   const progress = visibleTotal > 0 ? visiblePassed / visibleTotal : 0;
+  const isFullyPassed = visibleTotal > 0 && visiblePassed === visibleTotal;
+
+  if (isCollapsed) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={`Q${index + 1}. ${question.title} (${question.difficulty || 'N/A'}) - ${visiblePassed}/${visibleTotal} passed${isSubmitted ? ' (Submitted)' : ''}`}
+        style={{
+          width: '100%',
+          padding: '12px 4px',
+          background: isActive ? 'rgba(14, 124, 134, 0.12)' : 'transparent',
+          border: 'none',
+          borderLeft: isActive ? '3px solid #0E7C86' : '3px solid transparent',
+          cursor: 'pointer',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 4,
+          transition: 'background 150ms ease',
+        }}
+      >
+        <span
+          style={{
+            fontWeight: 700,
+            fontSize: '0.85rem',
+            color: isActive ? '#0E7C86' : '#1A2B3C',
+          }}
+        >
+          Q{index + 1}
+        </span>
+        {isSubmitted || isFullyPassed ? (
+          <span style={{ fontSize: '0.72rem', color: '#16a34a', fontWeight: 700 }}>✓</span>
+        ) : visibleTotal > 0 ? (
+          <span style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 600 }}>
+            {visiblePassed}/{visibleTotal}
+          </span>
+        ) : (
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: isActive ? '#0E7C86' : '#cbd5e1',
+              display: 'inline-block',
+            }}
+          />
+        )}
+      </button>
+    );
+  }
+
   return (
     <button
+      type="button"
       onClick={onClick}
       style={{
-        width: '100%', textAlign: 'left', padding: '12px 16px',
+        width: '100%',
+        textAlign: 'left',
+        padding: '12px 16px',
         background: isActive ? 'rgba(14, 124, 134, 0.1)' : 'transparent',
-        border: 'none', borderLeft: isActive ? '3px solid #0E7C86' : '3px solid transparent',
-        cursor: 'pointer', transition: 'all 200ms', fontFamily: 'Inter, sans-serif',
+        border: 'none',
+        borderLeft: isActive ? '3px solid #0E7C86' : '3px solid transparent',
+        cursor: 'pointer',
+        transition: 'all 200ms',
+        fontFamily: 'Inter, sans-serif',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
         <span style={{ fontWeight: 600, fontSize: '0.875rem', color: '#1A2B3C' }}>
           Q{index + 1}. {question.title}
         </span>
-        <span className={`badge badge-${question.difficulty === 'HARD' ? 'danger' : question.difficulty === 'MEDIUM' ? 'warning' : 'success'}`}
-          style={{ fontSize: '0.65rem' }}>
+        <span
+          className={`badge badge-${
+            question.difficulty === 'HARD' ? 'danger' : question.difficulty === 'MEDIUM' ? 'warning' : 'success'
+          }`}
+          style={{ fontSize: '0.65rem' }}
+        >
           {question.difficulty || 'N/A'}
         </span>
       </div>
@@ -105,17 +169,182 @@ export default function CandidateTestScreen() {
   const [questionProgress, setQuestionProgress] = useState({}); // { questionId: { passed, total } }
   const [disqualified, setDisqualified] = useState(false);
   const [warningMessage, setWarningMessage] = useState('');
+  const [loadError, setLoadError] = useState('');
   const heartbeatRef = useRef(null);
   const isSubmittingAll = useRef(false);
 
+  // ── Resizable & Collapsible Questions Panel (BUG-10) ────────────────────────
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    const saved = sessionStorage.getItem('questions_panel_collapsed');
+    return saved === 'true';
+  });
+  const [panelWidth, setPanelWidth] = useState(() => {
+    const saved = sessionStorage.getItem('questions_panel_width');
+    return saved ? Math.max(180, Math.min(480, parseInt(saved, 10))) : 260;
+  });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(panelWidth);
+
+  useEffect(() => {
+    sessionStorage.setItem('questions_panel_collapsed', String(isCollapsed));
+  }, [isCollapsed]);
+
+  useEffect(() => {
+    sessionStorage.setItem('questions_panel_width', String(panelWidth));
+  }, [panelWidth]);
+
+  const handleMouseDown = useCallback((e) => {
+    if (isCollapsed) return;
+    setIsDragging(true);
+    dragStartXRef.current = e.clientX;
+    dragStartWidthRef.current = panelWidth;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+  }, [isCollapsed, panelWidth]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e) => {
+      const delta = e.clientX - dragStartXRef.current;
+      const newWidth = Math.max(180, Math.min(480, dragStartWidthRef.current + delta));
+      setPanelWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [isDragging]);
+
+  // ── Resizable Bottom Panel (Height) (BUG-11) ────────────────────────────────
+  const [bottomHeight, setBottomHeight] = useState(() => {
+    const saved = sessionStorage.getItem('test_bottom_panel_height');
+    return saved ? Math.max(90, Math.min(500, parseInt(saved, 10))) : 200;
+  });
+  const [isDraggingHeight, setIsDraggingHeight] = useState(false);
+  const dragStartYRef = useRef(0);
+  const dragStartHeightRef = useRef(bottomHeight);
+
+  useEffect(() => {
+    sessionStorage.setItem('test_bottom_panel_height', String(bottomHeight));
+  }, [bottomHeight]);
+
+  const handleHeightMouseDown = useCallback((e) => {
+    e.preventDefault();
+    setIsDraggingHeight(true);
+    dragStartYRef.current = e.clientY;
+    dragStartHeightRef.current = bottomHeight;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'row-resize';
+  }, [bottomHeight]);
+
+  useEffect(() => {
+    if (!isDraggingHeight) return;
+
+    const handleMouseMove = (e) => {
+      const deltaY = dragStartYRef.current - e.clientY;
+      const newHeight = Math.max(90, Math.min(500, dragStartHeightRef.current + deltaY));
+      setBottomHeight(newHeight);
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingHeight(false);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [isDraggingHeight]);
+
+  // ── Resizable Custom Input vs Output (Width) (BUG-11) ───────────────────────
+  const [inputWidthPercent, setInputWidthPercent] = useState(() => {
+    const saved = sessionStorage.getItem('test_custom_input_split');
+    return saved ? Math.max(15, Math.min(85, parseFloat(saved))) : 50;
+  });
+  const [isDraggingSplit, setIsDraggingSplit] = useState(false);
+  const bottomPanelRef = useRef(null);
+
+  useEffect(() => {
+    sessionStorage.setItem('test_custom_input_split', String(inputWidthPercent));
+  }, [inputWidthPercent]);
+
+  const handleSplitMouseDown = useCallback((e) => {
+    e.preventDefault();
+    setIsDraggingSplit(true);
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+  }, []);
+
+  useEffect(() => {
+    if (!isDraggingSplit) return;
+
+    const handleMouseMove = (e) => {
+      if (!bottomPanelRef.current) return;
+      const rect = bottomPanelRef.current.getBoundingClientRect();
+      if (rect.width > 0) {
+        const percent = ((e.clientX - rect.left) / rect.width) * 100;
+        setInputWidthPercent(Math.max(15, Math.min(85, percent)));
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingSplit(false);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [isDraggingSplit]);
+
   // Load session from sessionStorage
   useEffect(() => {
-    const stored = sessionStorage.getItem('testSession');
-    if (!stored) { navigate('/candidate/join'); return; }
-    const s = JSON.parse(stored);
-    setSession(s);
-    setLanguage(s.test.supportedLanguages?.[0] || 'python');
-  }, [navigate]);
+    try {
+      const stored = sessionStorage.getItem('testSession');
+      if (!stored) {
+        setLoadError('No active test session found. Please rejoin the test room from the beginning.');
+        return;
+      }
+      const s = JSON.parse(stored);
+      if (!s || !s.test || !s.room) {
+        setLoadError('Incomplete test session data. Please rejoin the test room.');
+        return;
+      }
+      setSession(s);
+      setLanguage(s.test.supportedLanguages?.[0] || 'python');
+    } catch (err) {
+      console.error('Failed to parse test session:', err);
+      setLoadError('Failed to read test session data. Please rejoin the room.');
+    }
+  }, []);
 
   const activeQuestion = session?.questions?.[activeQuestionIdx];
 
@@ -150,7 +379,7 @@ export default function CandidateTestScreen() {
 
     heartbeatRef.current = setInterval(() => {
       // FR-5.5: questionsCompleted = sum of (visiblePassed/visibleTotal) per question, capped at 1.0
-      const questionsCompleted = session.questions.reduce((sum, q) => {
+      const questionsCompleted = (session.questions || []).reduce((sum, q) => {
         const prog = questionProgress[q._id] || { passed: 0, total: q.visibleTestCases?.length || 0 };
         return sum + Math.min(1.0, prog.total > 0 ? prog.passed / prog.total : 0);
       }, 0);
@@ -279,31 +508,6 @@ export default function CandidateTestScreen() {
     }
   };
 
-  if (!session) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>
-        <div className="spinner spinner-dark" style={{ width: 40, height: 40 }} />
-      </div>
-    );
-  }
-
-  // ── Disqualified screen ───────────────────────────────────────────────────────
-  if (disqualified) {
-    return (
-      <div style={{
-        minHeight: '100vh', background: '#1A2B3C', display: 'flex',
-        alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 32,
-      }}>
-        <div style={{ fontSize: '4rem' }}>🚫</div>
-        <h1 style={{ color: 'white', fontSize: '2rem' }}>Disqualified</h1>
-        <p style={{ color: 'rgba(255,255,255,0.7)', textAlign: 'center', maxWidth: 480 }}>
-          You have been disqualified from this test by the proctor.
-          Please contact the exam coordinator for further instructions.
-        </p>
-      </div>
-    );
-  }
-
   // Set starter code or saved draft when question or language changes
   useEffect(() => {
     if (!activeQuestion) {
@@ -327,6 +531,50 @@ export default function CandidateTestScreen() {
     }
   }, [activeQuestion, language, activeQuestionIdx, session?.test?._id]);
 
+  if (loadError) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 32, background: '#F8FAFC' }}>
+        <div style={{ fontSize: '3rem' }}>⚠️</div>
+        <h2 style={{ color: '#1A2B3C', fontSize: '1.4rem', fontWeight: 700 }}>Unable to Load Test Session</h2>
+        <p style={{ color: '#64748B', maxWidth: 460, textAlign: 'center', fontSize: '0.9rem' }}>{loadError}</p>
+        <button
+          type="button"
+          onClick={() => navigate('/candidate/join')}
+          className="btn btn-primary"
+          style={{ padding: '8px 20px', fontSize: '0.85rem' }}
+        >
+          Return to Join Room
+        </button>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', flexDirection: 'column', gap: 12 }}>
+        <div className="spinner spinner-dark" style={{ width: 40, height: 40, borderWidth: 3 }} />
+        <p style={{ color: '#64748B', fontSize: '0.85rem' }}>Loading test environment...</p>
+      </div>
+    );
+  }
+
+  // ── Disqualified screen ───────────────────────────────────────────────────────
+  if (disqualified) {
+    return (
+      <div style={{
+        minHeight: '100vh', background: '#1A2B3C', display: 'flex',
+        alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 32,
+      }}>
+        <div style={{ fontSize: '4rem' }}>🚫</div>
+        <h1 style={{ color: 'white', fontSize: '2rem' }}>Disqualified</h1>
+        <p style={{ color: 'rgba(255,255,255,0.7)', textAlign: 'center', maxWidth: 480 }}>
+          You have been disqualified from this test by the proctor.
+          Please contact the exam coordinator for further instructions.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* ── Fixed Stacked Header: (a) Test name + Room/ID row, then (b) Timer + Action row ── */}
@@ -334,12 +582,11 @@ export default function CandidateTestScreen() {
         {/* Row (a): Test Name & Room ID Badge */}
         <div className="test-header-top-row">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{
-              background: '#0E7C86', borderRadius: '50%', width: 28, height: 28,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem'
-            }}>
-              🌐
-            </div>
+            <img
+              src={globussoftLogo}
+              alt="Globussoft Technology"
+              style={{ height: 28, width: 'auto', objectFit: 'contain', display: 'block' }}
+            />
             <span style={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', letterSpacing: '0.01em' }}>
               {session.test.title}
             </span>
@@ -404,19 +651,75 @@ export default function CandidateTestScreen() {
         </div>
       )}
 
-      {/* ── Main Layout ─────────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px 1fr', overflow: 'hidden' }}>
+      {/* ── Main Layout with Resizable & Collapsible Questions Panel (BUG-10) ── */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
 
         {/* ── Question List sidebar ─────────────────────────────────────────── */}
-        <div style={{ borderRight: '1px solid #e5e7eb', background: 'white', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
-            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Questions
-            </div>
+        <div
+          style={{
+            width: isCollapsed ? 58 : panelWidth,
+            minWidth: isCollapsed ? 58 : panelWidth,
+            maxWidth: isCollapsed ? 58 : 480,
+            flexShrink: 0,
+            background: 'white',
+            borderRight: '1px solid #e5e7eb',
+            display: 'flex',
+            flexDirection: 'column',
+            overflowY: 'auto',
+            transition: isDragging ? 'none' : 'width 200ms cubic-bezier(0.4, 0, 0.2, 1), min-width 200ms cubic-bezier(0.4, 0, 0.2, 1)',
+            zIndex: 5,
+          }}
+        >
+          {/* Header with Title + Toggle Button */}
+          <div
+            style={{
+              padding: isCollapsed ? '12px 6px' : '12px 14px',
+              borderBottom: '1px solid #e5e7eb',
+              background: '#f9fafb',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: isCollapsed ? 'center' : 'space-between',
+              minHeight: 45,
+            }}
+          >
+            {!isCollapsed && (
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Questions
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsCollapsed((prev) => !prev)}
+              title={isCollapsed ? 'Expand Questions Panel' : 'Collapse Questions Panel'}
+              style={{
+                background: 'transparent',
+                border: '1px solid #e2e8f0',
+                borderRadius: 4,
+                cursor: 'pointer',
+                padding: '3px 6px',
+                fontSize: '0.72rem',
+                color: '#64748b',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 150ms ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#e2e8f0';
+                e.currentTarget.style.color = '#1e293b';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+                e.currentTarget.style.color = '#64748b';
+              }}
+            >
+              {isCollapsed ? '▶' : '◀'}
+            </button>
           </div>
+
           {(!session.questions || session.questions.length === 0) ? (
-            <div style={{ padding: 20, textAlign: 'center', color: '#6b7280', fontSize: '0.85rem' }}>
-              No questions found for this test session.
+            <div style={{ padding: 16, textAlign: 'center', color: '#6b7280', fontSize: '0.8rem' }}>
+              {!isCollapsed ? 'No questions found for this test session.' : '—'}
             </div>
           ) : (
             session.questions.map((q, idx) => (
@@ -427,14 +730,41 @@ export default function CandidateTestScreen() {
                 isActive={idx === activeQuestionIdx}
                 visiblePassed={questionProgress[q._id]?.passed || 0}
                 visibleTotal={questionProgress[q._id]?.total || q.visibleTestCases?.length || 0}
+                isSubmitted={submittedQuestions.has(q._id)}
+                isCollapsed={isCollapsed}
                 onClick={() => setActiveQuestionIdx(idx)}
               />
             ))
           )}
         </div>
 
+        {/* Resizable Divider Handle (when not collapsed) */}
+        {!isCollapsed && (
+          <div
+            onMouseDown={handleMouseDown}
+            style={{
+              width: 6,
+              cursor: 'col-resize',
+              background: isDragging ? '#0E7C86' : 'transparent',
+              borderRight: isDragging ? '1px solid #0E7C86' : 'none',
+              flexShrink: 0,
+              zIndex: 10,
+              transition: 'background 150ms ease',
+              marginRight: -6,
+              position: 'relative',
+            }}
+            title="Drag to resize Questions panel"
+            onMouseEnter={(e) => {
+              if (!isDragging) e.currentTarget.style.background = 'rgba(14, 124, 134, 0.3)';
+            }}
+            onMouseLeave={(e) => {
+              if (!isDragging) e.currentTarget.style.background = 'transparent';
+            }}
+          />
+        )}
+
         {/* ── Content area ─────────────────────────────────────────────────── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '400px 1fr', overflow: 'hidden' }}>
+        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '400px 1fr', overflow: 'hidden' }}>
 
           {/* Question panel */}
           <div className="test-question-panel" style={{ borderRight: '1px solid #e5e7eb' }}>
@@ -446,7 +776,10 @@ export default function CandidateTestScreen() {
                       Q{activeQuestionIdx + 1}. {activeQuestion.title}
                     </span>
                     {submittedQuestions.has(activeQuestion._id) && (
-                      <span className="badge badge-success">✓ Submitted</span>
+                      <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: '0.9em', lineHeight: 1, fontWeight: 700, display: 'inline-flex', alignItems: 'center' }}>✓</span>
+                        <span>Submitted</span>
+                      </span>
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -577,6 +910,7 @@ export default function CandidateTestScreen() {
                   contextmenu: false, // FR-5.4: disable right-click context menu
                   scrollBeyondLastLine: false,
                   wordWrap: 'on',
+                  automaticLayout: true,
                 }}
                 onMount={(editor) => {
                   // FR-5.4: Intercept Ctrl+C / Ctrl+V at the Monaco level
@@ -594,11 +928,52 @@ export default function CandidateTestScreen() {
               />
             </div>
 
-            {/* Custom input + output panel */}
-            <div style={{ height: 200, borderTop: '1px solid #333', display: 'flex', background: '#1e1e2e' }}>
+            {/* Horizontal Resizer Divider between Editor and Bottom Panel (BUG-11) */}
+            <div
+              onMouseDown={handleHeightMouseDown}
+              style={{
+                height: 6,
+                cursor: 'row-resize',
+                background: isDraggingHeight ? '#0E7C86' : '#2d2d44',
+                borderTop: '1px solid #333',
+                borderBottom: '1px solid #222',
+                zIndex: 10,
+                position: 'relative',
+                flexShrink: 0,
+                transition: 'background 150ms ease',
+              }}
+              title="Drag to resize Editor / Output panel height"
+              onMouseEnter={(e) => {
+                if (!isDraggingHeight) e.currentTarget.style.background = 'rgba(14, 124, 134, 0.5)';
+              }}
+              onMouseLeave={(e) => {
+                if (!isDraggingHeight) e.currentTarget.style.background = '#2d2d44';
+              }}
+            />
+
+            {/* Custom input + output panel (BUG-11) */}
+            <div
+              ref={bottomPanelRef}
+              style={{
+                height: bottomHeight,
+                display: 'flex',
+                background: '#1e1e2e',
+                overflow: 'hidden',
+                position: 'relative',
+                flexShrink: 0,
+              }}
+            >
               {/* Custom input */}
-              <div style={{ flex: 1, borderRight: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ padding: '6px 12px', background: '#2d2d44', fontSize: '0.75rem', color: '#9ca3af', fontWeight: 600 }}>
+              <div
+                style={{
+                  width: `${inputWidthPercent}%`,
+                  minWidth: 80,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                }}
+              >
+                <div style={{ padding: '6px 12px', background: '#2d2d44', fontSize: '0.75rem', color: '#9ca3af', fontWeight: 600, flexShrink: 0 }}>
                   Custom Input (optional)
                 </div>
                 <textarea
@@ -616,8 +991,39 @@ export default function CandidateTestScreen() {
                 />
               </div>
 
+              {/* Vertical Resizer Divider between Custom Input and Output (BUG-11) */}
+              <div
+                onMouseDown={handleSplitMouseDown}
+                style={{
+                  width: 6,
+                  cursor: 'col-resize',
+                  background: isDraggingSplit ? '#0E7C86' : '#2d2d44',
+                  borderLeft: '1px solid #333',
+                  borderRight: '1px solid #222',
+                  zIndex: 10,
+                  position: 'relative',
+                  flexShrink: 0,
+                  transition: 'background 150ms ease',
+                }}
+                title="Drag to resize Custom Input / Output width"
+                onMouseEnter={(e) => {
+                  if (!isDraggingSplit) e.currentTarget.style.background = 'rgba(14, 124, 134, 0.5)';
+                }}
+                onMouseLeave={(e) => {
+                  if (!isDraggingSplit) e.currentTarget.style.background = '#2d2d44';
+                }}
+              />
+
               {/* Output */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 80,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflowY: 'auto',
+                }}
+              >
                 <div style={{ padding: '6px 12px', background: '#2d2d44', fontSize: '0.75rem', color: '#9ca3af', fontWeight: 600, flexShrink: 0 }}>
                   Output
                 </div>

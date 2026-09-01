@@ -4,6 +4,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuthContext';
 import api from '../../services/apiClient';
 import toast from 'react-hot-toast';
+import globussoftLogo from '../../assets/globussoft-logo.png';
+import PasswordInput from '../../shared/PasswordInput';
 
 export default function CandidateLogin() {
   const { login } = useAuth();
@@ -39,11 +41,11 @@ export default function CandidateLogin() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-logo">
-          <div className="auth-logo-icon">🌐</div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#1A2B3C' }}>Globussoft Technology</div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Candidate Portal</div>
-          </div>
+          <img
+            src={globussoftLogo}
+            alt="Globussoft Technology"
+            style={{ height: 46, width: 'auto', objectFit: 'contain', display: 'block' }}
+          />
         </div>
 
         <h1 className="auth-title">Sign In</h1>
@@ -76,11 +78,9 @@ export default function CandidateLogin() {
 
           <div className="form-group">
             <label className="form-label" htmlFor="password">Password</label>
-            <input
+            <PasswordInput
               id="password"
               name="password"
-              type="password"
-              className="form-input"
               value={form.password}
               onChange={handleChange}
               placeholder="••••••••"

@@ -1,14 +1,21 @@
-// CandidateTestComplete — shown after submit-all or auto-submit
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuthContext';
+import globussoftLogo from '../../assets/globussoft-logo.png';
+import { stopScreenStream } from '../../services/screenStreamManager';
 
 export default function CandidateTestComplete() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
+  useEffect(() => {
+    // Release active screen sharing stream when test concludes (BUG-13)
+    stopScreenStream();
+  }, []);
+
   const handleDone = () => {
     // Clear session data
+    stopScreenStream();
     sessionStorage.removeItem('testSession');
     sessionStorage.removeItem('joinData');
     logout();
@@ -26,8 +33,13 @@ export default function CandidateTestComplete() {
         background: 'white', borderRadius: 24, padding: 48, maxWidth: 520,
         width: '100%', textAlign: 'center', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
       }}>
-        <div style={{ fontSize: '4rem', marginBottom: 16 }}>✅</div>
-        <h1 style={{ fontSize: '2rem', color: '#1A2B3C', marginBottom: 12 }}>
+        <img
+          src={globussoftLogo}
+          alt="Globussoft Technology"
+          style={{ height: 44, width: 'auto', objectFit: 'contain', margin: '0 auto 20px auto', display: 'block' }}
+        />
+        <div style={{ fontSize: '3rem', marginBottom: 12 }}>✅</div>
+        <h1 style={{ fontSize: '1.8rem', color: '#1A2B3C', marginBottom: 12 }}>
           Test Submitted!
         </h1>
         <p style={{ color: '#6b7280', lineHeight: 1.6, marginBottom: 24, fontSize: '1rem' }}>

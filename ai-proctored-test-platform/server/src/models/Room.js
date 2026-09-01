@@ -6,7 +6,7 @@ const roomSchema = new mongoose.Schema({
   roomName: { type: String, required: true }, // e.g., "Room 201"
   roomCode: { type: String, required: true, unique: true }, // auto-generated join ID
   roomPassword: { type: String, required: true }, // auto-generated
-  passwordValidUntil: { type: Date, required: true }, // createdAt + startTestWindowMinutes
+  passwordValidUntil: { type: Date, default: null }, // set when test goes LIVE (now + startTestWindowMinutes)
   capacity: { type: Number },
   status: { type: String, enum: ['ACTIVE', 'CLOSED'], default: 'ACTIVE' },
   joinedCandidates: [

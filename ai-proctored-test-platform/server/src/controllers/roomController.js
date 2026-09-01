@@ -51,10 +51,11 @@ const createRoom = async (req, res, next) => {
 
     const roomPassword = generateRoomPassword();
     const now = new Date();
-    // passwordValidUntil = createdAt + startTestWindowMinutes (Section 8.2)
-    const passwordValidUntil = new Date(
-      now.getTime() + (test.startTestWindowMinutes || 10) * 60 * 1000
-    );
+    // Only start the password countdown if test is already LIVE!
+    // For DRAFT / SCHEDULED tests, leave passwordValidUntil as null until the test goes LIVE
+    const passwordValidUntil = test.status === 'LIVE'
+      ? new Date(now.getTime() + (test.startTestWindowMinutes || 10) * 60 * 1000)
+      : null;
 
     const room = await Room.create({
       testId,
@@ -281,6 +282,8 @@ const getLiveCandidates = async (req, res, next) => {
           roomName: sub.roomId?.roomName || 'Unassigned Room',
           status: candidate.isDisqualified ? 'DISQUALIFIED' : sub.status,
           timeRemaining,
+          candidateStartTime: sub.candidateStartTime,
+          candidateEndTime: sub.candidateEndTime,
           questionsCompleted: sub.visibleTestCasesPassed > 0 ? 1 : 0,
           malpracticeCount: malpracticeCounts[cid] || 0,
           colorStatus,
@@ -306,4 +309,205 @@ const getLiveCandidates = async (req, res, next) => {
   }
 };
 
-module.exports = { createRoom, getRooms, deleteRoom, getRoomCandidates, getLiveCandidates };
+// ── POST /rooms/:roomId/candidates/:candidateId/late-join-request ─────────────
+// Candidate notifies admin that they want to join after the room code expired
+// Rate-limited to ONE request per candidate per room
+const lateJoinRequest = async (req, res, next) => {
+  try {
+    const { roomId, candidateId } = req.params;
+
+    const candidate = await Candidate.findById(candidateId);
+    if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
+
+    const room = await Room.findById(roomId);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+
+    // Requirement 3: Server-side enforcement (rate-limit to ONE request)
+    // If candidate.lateJoinRequestedAt is already set → return 409 Conflict, do NOT re-emit socket event
+    if (candidate.lateJoinRequestedAt) {
+      return res.status(409).json({
+        error: 'Late join request already pending',
+        lateJoinRequestedAt: candidate.lateJoinRequestedAt,
+      });
+    }
+
+    // Set lateJoinRequestedAt = now
+    candidate.lateJoinRequestedAt = new Date();
+    candidate.lateJoinRoomId = room._id;
+    await candidate.save();
+
+    // Requirement 3: Emit candidate:lateJoinRequest to the admin room
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`test:${room.testId}:admin`).emit('candidate:lateJoinRequest', {
+        candidateId: candidate._id.toString(),
+        candidateName: candidate.name,
+        candidateEmail: candidate.email,
+        candidatePhone: candidate.phone,
+        roomId: room._id.toString(),
+        roomName: room.roomName,
+        roomCode: room.roomCode,
+        testId: room.testId.toString(),
+        requestedAt: candidate.lateJoinRequestedAt,
+      });
+    }
+
+    res.json({
+      message: 'Admin notified of late join request',
+      lateJoinRequestedAt: candidate.lateJoinRequestedAt,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /rooms/:roomId/candidates/:candidateId/allow-late-entry ───────────────
+// Admin grants manualJoinOverride to allow candidate entry past the deadline
+const allowLateJoin = async (req, res, next) => {
+  try {
+    const { roomId, candidateId } = req.params;
+
+    const candidate = await Candidate.findById(candidateId);
+    if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
+
+    const room = await Room.findById(roomId);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+
+    candidate.manualJoinOverride = true;
+    candidate.lateJoinRequestedAt = null;
+    candidate.lateJoinRoomId = room._id;
+    await candidate.save();
+
+    // Broadcast approval to candidate personal channel and admin channel
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`candidate:${candidateId}`).emit('candidate:lateJoinApproved', {
+        candidateId,
+        roomId: room._id.toString(),
+        roomCode: room.roomCode,
+        message: 'Admin has granted you permission to enter the test room.',
+      });
+      io.to(`test:${room.testId}:admin`).emit('candidate:lateJoinProcessed', {
+        candidateId,
+        roomId: room._id.toString(),
+        action: 'APPROVED',
+      });
+    }
+
+    res.json({
+      message: 'Late join approved successfully',
+      candidateId,
+      manualJoinOverride: true,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /rooms/:roomId/candidates/:candidateId/dismiss-late-join ─────────────
+// Admin dismisses/denies the late join request, resetting lateJoinRequestedAt
+const dismissLateJoin = async (req, res, next) => {
+  try {
+    const { roomId, candidateId } = req.params;
+
+    const candidate = await Candidate.findById(candidateId);
+    if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
+
+    const room = await Room.findById(roomId);
+
+    candidate.lateJoinRequestedAt = null;
+    candidate.lateJoinRoomId = null;
+    candidate.manualJoinOverride = false;
+    await candidate.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`candidate:${candidateId}`).emit('candidate:lateJoinDismissed', {
+        candidateId,
+        roomId: room?._id?.toString() || roomId,
+        message: 'Admin has dismissed the late join request.',
+      });
+      if (room) {
+        io.to(`test:${room.testId}:admin`).emit('candidate:lateJoinProcessed', {
+          candidateId,
+          roomId: room._id.toString(),
+          action: 'DISMISSED',
+        });
+      }
+    }
+
+    res.json({
+      message: 'Late join request dismissed and reset',
+      candidateId,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /candidates/:candidateId/late-join-status ─────────────────────────────
+// Returns candidate's current late-join status for persistent button state
+const getLateJoinStatus = async (req, res, next) => {
+  try {
+    const { candidateId } = req.params;
+    const candidate = await Candidate.findById(candidateId, 'lateJoinRequestedAt lateJoinRoomId manualJoinOverride name email');
+    if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
+
+    res.json({
+      candidateId: candidate._id,
+      lateJoinRequestedAt: candidate.lateJoinRequestedAt,
+      lateJoinRoomId: candidate.lateJoinRoomId,
+      manualJoinOverride: candidate.manualJoinOverride,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /tests/:testId/pending-late-joins ─────────────────────────────────────
+// Fetches any candidates with active lateJoinRequestedAt for this test
+const getPendingLateJoinRequests = async (req, res, next) => {
+  try {
+    const { testId } = req.params;
+    const rooms = await Room.find({ testId });
+    const roomIds = rooms.map(r => r._id);
+
+    const candidates = await Candidate.find({
+      lateJoinRoomId: { $in: roomIds },
+      lateJoinRequestedAt: { $ne: null },
+      manualJoinOverride: false,
+    });
+
+    const roomMap = {};
+    rooms.forEach(r => { roomMap[r._id.toString()] = r; });
+
+    const requests = candidates.map(c => ({
+      candidateId: c._id.toString(),
+      candidateName: c.name,
+      candidateEmail: c.email,
+      candidatePhone: c.phone,
+      roomId: c.lateJoinRoomId ? c.lateJoinRoomId.toString() : null,
+      roomName: roomMap[c.lateJoinRoomId?.toString()]?.roomName || 'Test Room',
+      roomCode: roomMap[c.lateJoinRoomId?.toString()]?.roomCode || '',
+      testId,
+      requestedAt: c.lateJoinRequestedAt,
+    }));
+
+    res.json({ requests });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = {
+  createRoom,
+  getRooms,
+  deleteRoom,
+  getRoomCandidates,
+  getLiveCandidates,
+  lateJoinRequest,
+  allowLateJoin,
+  dismissLateJoin,
+  getLateJoinStatus,
+  getPendingLateJoinRequests,
+};

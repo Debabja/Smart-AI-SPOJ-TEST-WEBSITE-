@@ -1,15 +1,18 @@
-// CandidateInstructions — show test.instructions before start-attempt
-// Explicitly requests and verifies mandatory Webcam AND Microphone permissions before starting (FR-5.2)
+// CandidateInstructions.jsx — show test.instructions before start-attempt
+// Explicitly requests and verifies mandatory Webcam AND Microphone permissions before starting (FR-5.2, BUG-08)
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import api from '../../services/apiClient';
 import toast from 'react-hot-toast';
+import api from '../../services/apiClient';
+import globussoftLogo from '../../assets/globussoft-logo.png';
+import { setScreenStream } from '../../services/screenStreamManager';
 
 export default function CandidateInstructions() {
   const navigate = useNavigate();
   const [joinData, setJoinData] = useState(null);
   const [webcamGranted, setWebcamGranted] = useState(false);
   const [micGranted, setMicGranted] = useState(false);
+  const [screenGranted, setScreenGranted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const videoRef = useRef(null);
@@ -24,45 +27,123 @@ export default function CandidateInstructions() {
     setJoinData(JSON.parse(stored));
   }, [navigate]);
 
-  // FR-5.2: Mandatory Webcam + Mic permission check
+  // Clean up media tracks when unmounting
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+    };
+  }, []);
+
+  // Ensure video element receives stream whenever webcamGranted changes
+  useEffect(() => {
+    if (webcamGranted && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [webcamGranted]);
+
+  // Ref callback to bind stream immediately on video mount
+  const handleVideoRef = (el) => {
+    videoRef.current = el;
+    if (el && streamRef.current) {
+      el.srcObject = streamRef.current;
+    }
+  };
+
+  // FR-5.2: Mandatory Webcam, Mic, and Screen Sharing permission check (BUG-08, BUG-13)
   const requestMediaPermissions = async () => {
     setError('');
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError('Your browser does not support media access. Please use modern Chrome or Edge.');
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: true,
-      });
+      // 1. Webcam + Microphone access
+      let hasVideo = webcamGranted;
+      let hasAudio = micGranted;
 
-      streamRef.current = stream;
-      const videoTracks = stream.getVideoTracks();
-      const audioTracks = stream.getAudioTracks();
+      if (!webcamGranted || !micGranted) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: true,
+        });
 
-      const hasVideo = videoTracks.length > 0 && videoTracks[0].enabled;
-      const hasAudio = audioTracks.length > 0 && audioTracks[0].enabled;
+        streamRef.current = stream;
+        const videoTracks = stream.getVideoTracks();
+        const audioTracks = stream.getAudioTracks();
 
-      setWebcamGranted(hasVideo);
-      setMicGranted(hasAudio);
+        hasVideo = videoTracks.length > 0 && videoTracks[0].readyState === 'live';
+        hasAudio = audioTracks.length > 0 && audioTracks[0].readyState === 'live';
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+        setWebcamGranted(hasVideo);
+        setMicGranted(hasAudio);
+
+        if (videoTracks[0]) {
+          videoTracks[0].onended = () => setWebcamGranted(false);
+        }
+        if (audioTracks[0]) {
+          audioTracks[0].onended = () => setMicGranted(false);
+        }
+      }
+
+      // 2. Screen Sharing access for TAB_SWITCH and FULLSCREEN_EXIT proctoring (BUG-13)
+      if (!screenGranted) {
+        if (!navigator.mediaDevices.getDisplayMedia) {
+          setError('Your browser does not support screen proctoring. Please use Chrome or Edge.');
+          return;
+        }
+
+        toast('Please select "Entire Screen" in the browser prompt to allow proctoring verification.', {
+          icon: '🖥️',
+          duration: 5000,
+        });
+
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { cursor: 'always' },
+          audio: false,
+        });
+
+        const screenTracks = screenStream.getVideoTracks();
+        const hasScreen = screenTracks.length > 0 && screenTracks[0].readyState === 'live';
+
+        if (hasScreen) {
+          setScreenStream(screenStream);
+          setScreenGranted(true);
+
+          screenTracks[0].onended = () => {
+            setScreenGranted(false);
+            toast.error('Screen sharing was stopped. Please grant screen sharing to proceed.');
+          };
+        }
       }
 
       if (hasVideo && hasAudio) {
-        toast.success('Webcam and Microphone access verified!');
-      } else {
-        setError('Both camera and microphone access are required.');
+        setError('');
+        toast.success('Camera, Microphone, and Screen Sharing verified!');
       }
     } catch (err) {
-      setWebcamGranted(false);
-      setMicGranted(false);
-      setError('Camera and Microphone access are mandatory to take this proctored test. Please grant permissions in your browser and try again.');
+      console.error('Media permission error:', err);
+
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setError('Permission was denied or cancelled. Camera, microphone, and screen sharing are all mandatory for this proctored test. Please click "Grant Permissions" and allow each prompt.');
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        setError('No camera or microphone found. Please connect a working webcam and microphone to proceed.');
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        setError('Camera or microphone is already in use by another application. Please close other applications using your devices and try again.');
+      } else {
+        setError('Camera, microphone, and screen sharing access are mandatory. Please grant permissions and try again.');
+      }
     }
   };
 
   const handleStartTest = async () => {
-    // Strict requirement 1: Block start action until both permissions are granted
-    if (!webcamGranted || !micGranted) {
-      setError('Both camera and microphone permissions must be granted before starting the test (FR-5.2).');
+    // Strict requirement: Block start action until camera, mic, and screen permissions are granted (BUG-13)
+    if (!webcamGranted || !micGranted || !screenGranted) {
+      setError('Camera, microphone, and screen sharing permissions must all be granted before starting the test (FR-5.2).');
       return;
     }
 
@@ -76,15 +157,24 @@ export default function CandidateInstructions() {
       // POST /tests/:testId/start-attempt (§9.5)
       const { data } = await api.startAttempt(joinData.test._id, { roomId: joinData.room._id });
 
+      // Stop instruction preview stream before test screen initializes proctoring
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+
       // Store session data for the test screen
-      sessionStorage.setItem('testSession', JSON.stringify({
-        test: joinData.test,
-        room: joinData.room,
-        questions: data.questions,
-        candidateStartTime: data.candidateStartTime,
-        candidateEndTime: data.candidateEndTime,
-        submissionSessionId: data.submissionSessionId,
-      }));
+      sessionStorage.setItem(
+        'testSession',
+        JSON.stringify({
+          test: joinData.test,
+          room: joinData.room,
+          questions: data.questions,
+          candidateStartTime: data.candidateStartTime,
+          candidateEndTime: data.candidateEndTime,
+          submissionSessionId: data.submissionSessionId,
+        })
+      );
 
       // Navigate based on test type
       if (joinData.test.testType === 'AI_TEST') {
@@ -107,24 +197,32 @@ export default function CandidateInstructions() {
   const isPermissionsComplete = webcamGranted && micGranted;
 
   return (
-    <div style={{ minHeight: '100vh', background: '#F7F9FA', display: 'flex', flexDirection: 'column' }}>
+    <div className="app-layout" style={{ minHeight: '100vh', background: '#F7F9FA', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <div style={{ background: '#1A2B3C', padding: '16px 32px', display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{ background: '#0E7C86', borderRadius: '50%', width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' }}>🌐</div>
-        <div>
-          <div style={{ color: 'white', fontWeight: 800, fontSize: '1rem' }}>Globussoft Technology</div>
-          <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.75rem' }}>Technology Ahead of Time</div>
-        </div>
+      <div style={{ background: '#1A2B3C', padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 12 }}>
+        <img
+          src={globussoftLogo}
+          alt="Globussoft Technology"
+          style={{ height: 38, width: 'auto', objectFit: 'contain', display: 'block' }}
+        />
       </div>
 
       <div style={{ flex: 1, padding: 32, maxWidth: 900, margin: '0 auto', width: '100%' }}>
         <div style={{ marginBottom: 24 }}>
-          <span className="badge badge-teal" style={{ marginBottom: 8 }}>{joinData.test.testType}</span>
+          <span className="badge badge-teal" style={{ marginBottom: 8 }}>
+            {joinData.test.testType}
+          </span>
           <h1 style={{ fontSize: '1.8rem', color: '#1A2B3C', marginBottom: 8 }}>{joinData.test.title}</h1>
           <div style={{ display: 'flex', gap: 24, color: '#6b7280', fontSize: '0.875rem' }}>
-            <span>⏱️ Duration: <strong>{joinData.test.durationMinutes} minutes</strong></span>
-            <span>📋 Questions: <strong>{joinData.test.totalQuestions}</strong></span>
-            <span>🏠 Room: <strong>{joinData.room.roomName}</strong></span>
+            <span>
+              ⏱️ Duration: <strong>{joinData.test.durationMinutes} minutes</strong>
+            </span>
+            <span>
+              📋 Questions: <strong>{joinData.test.totalQuestions}</strong>
+            </span>
+            <span>
+              🏠 Room: <strong>{joinData.room.roomName}</strong>
+            </span>
           </div>
         </div>
 
@@ -143,7 +241,7 @@ export default function CandidateInstructions() {
               <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1A2B3C', marginBottom: 12 }}>
                 ⚠️ Mandatory Proctoring Rules
               </h3>
-              <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 0 }}>
                 {[
                   'Stay in fullscreen mode throughout the test. Exiting fullscreen will be logged as a violation.',
                   'Do not switch tabs or minimize the browser window. Tab switches are logged with proof.',
@@ -167,21 +265,23 @@ export default function CandidateInstructions() {
               <div className="card-header">
                 <h3 className="card-title">📸 Device Permissions (FR-5.2)</h3>
               </div>
-              <div style={{
-                width: '100%',
-                aspectRatio: '4/3',
-                background: '#1A2B3C',
-                borderRadius: 8,
-                overflow: 'hidden',
-                marginBottom: 12,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                position: 'relative',
-              }}>
+              <div
+                style={{
+                  width: '100%',
+                  aspectRatio: '4/3',
+                  background: '#1A2B3C',
+                  borderRadius: 8,
+                  overflow: 'hidden',
+                  marginBottom: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  position: 'relative',
+                }}
+              >
                 {webcamGranted ? (
                   <video
-                    ref={videoRef}
+                    ref={handleVideoRef}
                     autoPlay
                     muted
                     playsInline
@@ -194,44 +294,62 @@ export default function CandidateInstructions() {
                   </div>
                 )}
                 {webcamGranted && (
-                  <div style={{
-                    position: 'absolute', top: 8, right: 8,
-                    background: '#2ECC71', borderRadius: 4, padding: '2px 8px',
-                    fontSize: '0.7rem', fontWeight: 700, color: 'white',
-                  }}>
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 8,
+                      right: 8,
+                      background: '#2ECC71',
+                      borderRadius: 4,
+                      padding: '2px 8px',
+                      fontSize: '0.7rem',
+                      fontWeight: 700,
+                      color: 'white',
+                    }}
+                  >
                     ● LIVE PREVIEW
                   </div>
                 )}
               </div>
 
-              {/* Status Indicators for Webcam & Mic */}
+              {/* Status Indicators for Webcam, Mic & Screen */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
                   <span style={{ color: '#4b5563' }}>Webcam:</span>
                   <span style={{ fontWeight: 600, color: webcamGranted ? '#2ECC71' : '#E74C3C' }}>
-                    {webcamGranted ? '✅ Granted' : '❌ Not Granted'}
+                    {webcamGranted ? '✓ Granted' : '✗ Not Granted'}
                   </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
                   <span style={{ color: '#4b5563' }}>Microphone:</span>
                   <span style={{ fontWeight: 600, color: micGranted ? '#2ECC71' : '#E74C3C' }}>
-                    {micGranted ? '✅ Granted' : '❌ Not Granted'}
+                    {micGranted ? '✓ Granted' : '✗ Not Granted'}
                   </span>
                 </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                  <span style={{ color: '#4b5563' }}>Screen Share:</span>
+                  <span style={{ fontWeight: 600, color: screenGranted ? '#2ECC71' : '#E74C3C' }}>
+                    {screenGranted ? '✓ Granted' : '✗ Not Granted'}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ fontSize: '0.74rem', color: '#64748b', marginBottom: 12, lineHeight: 1.4, background: '#f8fafc', padding: '8px 10px', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                ℹ️ <strong>Screen sharing is required</strong> so violations like tab-switching and exiting fullscreen can be verified.
               </div>
 
               {!isPermissionsComplete ? (
                 <button
                   id="grant-media-btn"
                   className="btn btn-secondary"
-                  style={{ width: '100%' }}
+                  style={{ width: '100%', fontWeight: 600 }}
                   onClick={requestMediaPermissions}
                 >
-                  📷 Grant Camera &amp; Mic Access
+                  📷🖥️ Grant Camera, Mic &amp; Screen Access
                 </button>
               ) : (
                 <div className="alert alert-success" style={{ margin: 0, fontSize: '0.8rem' }}>
-                  ✅ Devices verified — ready to begin!
+                  ✅ Devices &amp; Screen verified — ready to begin!
                 </div>
               )}
             </div>
@@ -249,13 +367,17 @@ export default function CandidateInstructions() {
                 onClick={handleStartTest}
                 disabled={loading || !isPermissionsComplete}
               >
-                {loading
-                  ? <><span className="spinner" /> Starting test...</>
-                  : '🚀 Start Test — Enter Fullscreen'}
+                {loading ? (
+                  <>
+                    <span className="spinner" /> Starting test...
+                  </>
+                ) : (
+                  '🚀 Start Test — Enter Fullscreen'
+                )}
               </button>
               {!isPermissionsComplete && (
                 <p style={{ color: '#f87171', fontSize: '0.75rem', textAlign: 'center', marginTop: 8 }}>
-                  🔒 Camera &amp; Mic access must be granted to start
+                  🔒 Camera, Mic &amp; Screen access must be granted to start
                 </p>
               )}
             </div>

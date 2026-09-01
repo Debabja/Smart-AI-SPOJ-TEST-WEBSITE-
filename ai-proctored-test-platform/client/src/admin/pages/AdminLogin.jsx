@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuthContext';
 import api from '../../services/apiClient';
 import toast from 'react-hot-toast';
+import globussoftLogo from '../../assets/globussoft-logo.png';
+import PasswordInput from '../../shared/PasswordInput';
 
 export default function AdminLogin() {
   const { login } = useAuth();
@@ -33,11 +35,11 @@ export default function AdminLogin() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-logo">
-          <div className="auth-logo-icon">🌐</div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#1A2B3C' }}>Globussoft Technology</div>
-            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Admin Portal</div>
-          </div>
+          <img
+            src={globussoftLogo}
+            alt="Globussoft Technology"
+            style={{ height: 46, width: 'auto', objectFit: 'contain', display: 'block' }}
+          />
         </div>
         <h1 className="auth-title">Admin Sign In</h1>
         <p className="auth-subtitle">Authorized personnel only</p>
@@ -51,9 +53,14 @@ export default function AdminLogin() {
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="admin-password">Password</label>
-            <input id="admin-password" type="password" className="form-input" value={form.password}
+            <PasswordInput
+              id="admin-password"
+              name="password"
+              value={form.password}
               onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))}
-              placeholder="••••••••" required />
+              placeholder="••••••••"
+              required
+            />
           </div>
           <button type="submit" id="admin-login-btn" className="btn btn-primary btn-lg"
             style={{ width: '100%', marginTop: 8 }} disabled={loading}>

@@ -5,6 +5,7 @@ const Room = require('../models/Room');
 const Question = require('../models/Question');
 const QuestionSet = require('../models/QuestionSet');
 const Submission = require('../models/Submission');
+const Candidate = require('../models/Candidate');
 const judge0Service = require('../services/judge0Service');
 
 // ── POST /rooms/join ──────────────────────────────────────────────────────────
@@ -21,11 +22,6 @@ const joinRoom = async (req, res, next) => {
     const room = await Room.findOne({ roomCode });
     if (!room) return res.status(404).json({ error: 'Room not found' });
 
-    // FR-3.3: Password validity check
-    if (new Date() > room.passwordValidUntil) {
-      return res.status(403).json({ error: 'Room code expired' });
-    }
-
     if (room.status === 'CLOSED') {
       return res.status(403).json({ error: 'Room is closed' });
     }
@@ -38,8 +34,23 @@ const joinRoom = async (req, res, next) => {
     const test = await Test.findById(room.testId).populate('questionSetId');
     if (!test) return res.status(404).json({ error: 'Test not found' });
 
+    // Condition (a): Test.status must be LIVE
     if (test.status !== 'LIVE') {
-      return res.status(403).json({ error: 'Test is not currently live' });
+      return res.status(403).json({ error: 'This test has not started yet' });
+    }
+
+    const candidate = await Candidate.findById(req.user.id);
+    const hasManualOverride = candidate && candidate.manualJoinOverride === true;
+
+    // Condition (b): now <= room.passwordValidUntil (bypassed if admin granted manualJoinOverride)
+    if ((!room.passwordValidUntil || new Date() > room.passwordValidUntil) && !hasManualOverride) {
+      return res.status(403).json({
+        error: 'Room code expired',
+        roomId: room._id,
+        roomName: room.roomName,
+        lateJoinRequestedAt: candidate?.lateJoinRequestedAt || null,
+        manualJoinOverride: candidate?.manualJoinOverride || false,
+      });
     }
 
     // Associate candidate with the room in DB
@@ -50,6 +61,14 @@ const joinRoom = async (req, res, next) => {
         $addToSet: { joinedCandidates: { candidateId, joinedAt: new Date() } },
       }
     );
+
+    // If manualJoinOverride was active, clear it now that candidate joined
+    if (candidate && (candidate.manualJoinOverride || candidate.lateJoinRequestedAt)) {
+      candidate.manualJoinOverride = false;
+      candidate.lateJoinRequestedAt = null;
+      candidate.lateJoinRoomId = null;
+      await candidate.save();
+    }
 
     // Broadcast real-time candidate join to admin monitoring channels
     const io = req.app.get('io');
@@ -204,6 +223,24 @@ const startAttempt = async (req, res, next) => {
         console.error('[AutoSubmit] Error:', err);
       }
     }, msUntilEnd);
+
+    // Broadcast candidate start to admins
+    const io = req.app.get('io');
+    if (io) {
+      const Candidate = require('../models/Candidate');
+      Candidate.findById(candidateId, 'name email').then((cand) => {
+        io.to(`test:${testId}:admin`).emit('dashboard:update', {
+          candidateId,
+          name: cand?.name,
+          roomId: targetRoomId,
+          status: 'IN_PROGRESS',
+          questionsCompleted: 0,
+          timeRemaining: msUntilEnd,
+          candidateStartTime,
+          candidateEndTime,
+        });
+      }).catch(() => {});
+    }
 
     res.json({
       submissionSessionId: createdSubmissions[0]?._id, // session reference
@@ -368,6 +405,7 @@ const submitAll = async (req, res, next) => {
     const Candidate = require('../models/Candidate');
     const candidate = await Candidate.findById(candidateId, 'name');
     io.to(`test:${testId}:admin`).emit('candidate:submitted', {
+      candidateId,
       candidateName: candidate?.name || 'Unknown',
     });
 

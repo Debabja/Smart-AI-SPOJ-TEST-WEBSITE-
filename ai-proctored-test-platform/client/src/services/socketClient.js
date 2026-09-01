@@ -99,4 +99,17 @@ export const offTestEnded = (cb) => { socket?.off('test:ended', cb); };
 export const onRoomUpdated = (cb) => { socket?.on('room:updated', cb); };
 export const offRoomUpdated = (cb) => { socket?.off('room:updated', cb); };
 
+// ── Late Join notification events ─────────────────────────────────────────────
+export const onLateJoinRequest = (cb) => { socket?.on('candidate:lateJoinRequest', cb); };
+export const offLateJoinRequest = (cb) => { socket?.off('candidate:lateJoinRequest', cb); };
+
+export const onLateJoinApproved = (cb) => { socket?.on('candidate:lateJoinApproved', cb); };
+export const offLateJoinApproved = (cb) => { socket?.off('candidate:lateJoinApproved', cb); };
+
+export const onLateJoinDismissed = (cb) => { socket?.on('candidate:lateJoinDismissed', cb); };
+export const offLateJoinDismissed = (cb) => { socket?.off('candidate:lateJoinDismissed', cb); };
+
+export const onLateJoinProcessed = (cb) => { socket?.on('candidate:lateJoinProcessed', cb); };
+export const offLateJoinProcessed = (cb) => { socket?.off('candidate:lateJoinProcessed', cb); };
+
 export default { initSocket, getSocket, disconnectSocket };

@@ -7,6 +7,8 @@ const Shortlist = require('../models/Shortlist');
 const MalpracticeLog = require('../models/MalpracticeLog');
 const shortlistService = require('../services/shortlistService');
 const PDFDocument = require('pdfkit');
+const path = require('path');
+const fs = require('fs');
 
 // ── GET /tests/:testId/results ────────────────────────────────────────────────
 // Response: { results: [] } (per-candidate scores)
@@ -70,26 +72,41 @@ const exportShortlistPdf = async (req, res, next) => {
     doc.pipe(res);
 
     // ── Globussoft Letterhead (Section 14) ──────────────────────────────────
-    // Primary Teal: #0E7C86, Dark Navy: #1A2B3C
+    // Clean letterhead banner with official Globussoft logo
     doc
-      .rect(0, 0, doc.page.width, 100)
+      .rect(0, 0, doc.page.width, 105)
+      .fill('#ffffff');
+
+    doc
+      .rect(0, 102, doc.page.width, 3)
       .fill('#0E7C86');
 
-    doc
-      .fillColor('white')
-      .font('Helvetica-Bold')
-      .fontSize(22)
-      .text('Globussoft Technology', 50, 25);
+    const logoPath = path.join(__dirname, '../assets/globussoft-logo.png');
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, 50, 18, { height: 68, fit: [180, 68] });
+    } else {
+      doc
+        .fillColor('#0E7C86')
+        .font('Helvetica-Bold')
+        .fontSize(22)
+        .text('Globussoft Technology', 50, 25);
+
+      doc
+        .font('Helvetica')
+        .fontSize(11)
+        .text('Technology Ahead of Time', 50, 55);
+    }
 
     doc
-      .font('Helvetica')
-      .fontSize(11)
-      .text('Technology Ahead of Time', 50, 55); // Section 14 tagline
-
-    doc
+      .fillColor('#4b5563')
       .font('Helvetica')
       .fontSize(9)
-      .text('1st Floor, Uday Mansion, Koramangala Industrial Layout, Koramangala, Bengaluru', 50, 75);
+      .text(
+        'Globussoft Technology\n1st Floor, Uday Mansion, Koramangala Industrial Layout,\nKoramangala, Bengaluru, Karnataka 560034',
+        280,
+        28,
+        { align: 'right', width: 265 }
+      );
 
     // ── Report Title ─────────────────────────────────────────────────────────
     doc
