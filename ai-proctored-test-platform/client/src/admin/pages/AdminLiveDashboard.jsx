@@ -31,7 +31,9 @@ const STATUS_COLORS = {
 // ── Candidate Session Remaining Time Helper (Pure client-side countdown) ──────
 const getCandidateRemainingMs = (candidate, currentNow) => {
   if (!candidate) return 0;
-  if (candidate.status === 'SUBMITTED' || candidate.status === 'AUTO_SUBMITTED_TIME_UP') {
+  // BUG-24: Only candidates genuinely IN_PROGRESS have active remaining time.
+  // Terminal/completed states (SUBMITTED, DISQUALIFIED, etc.) or NOT_STARTED immediately yield 0.
+  if (candidate.status !== 'IN_PROGRESS' || !candidate.candidateStartTime) {
     return 0;
   }
   if (candidate.candidateEndTime) {
@@ -366,6 +368,14 @@ export default function AdminLiveDashboard() {
   const [candidateLogs, setCandidateLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
+  // BUG-24: Derive fresh candidate state from candidatesMap to guarantee real-time updates while modal is open
+  const activeInspectCandidate = useMemo(() => {
+    if (!inspectCandidate) return null;
+    const cid = inspectCandidate.candidateId || inspectCandidate.id || inspectCandidate._id;
+    const fromMap = cid ? candidatesMap[cid] : null;
+    return fromMap ? { ...inspectCandidate, ...fromMap } : inspectCandidate;
+  }, [inspectCandidate, candidatesMap]);
+
   // Fetch candidate malpractice logs whenever inspect modal opens
   useEffect(() => {
     const targetCid = inspectCandidate?.candidateId || inspectCandidate?.id || inspectCandidate?._id;
@@ -631,6 +641,22 @@ export default function AdminLiveDashboard() {
               candidateEndTime: new Date().toISOString(),
             },
           };
+        });
+
+        // BUG-24: Also update inspectCandidate state if admin is currently inspecting this candidate
+        setInspectCandidate((prev) => {
+          if (!prev) return prev;
+          const prevId = prev.candidateId || prev.id || prev._id;
+          if (String(prevId) === String(subData.candidateId)) {
+            return {
+              ...prev,
+              status: 'SUBMITTED',
+              colorStatus: 'GREEN',
+              timeRemaining: 0,
+              candidateEndTime: new Date().toISOString(),
+            };
+          }
+          return prev;
         });
       }
     };
@@ -1478,7 +1504,7 @@ export default function AdminLiveDashboard() {
         )}
 
         {/* ── Candidate Inspect Modal with Malpractice Proof & Evidence History (FR-7.3, FR-7.4) ── */}
-        {inspectCandidate && (
+        {activeInspectCandidate && (
           <div className="modal-backdrop" onClick={() => setInspectCandidate(null)}>
             <div className="modal-container" style={{ maxWidth: 680, maxHeight: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
               <div className="modal-header">
@@ -1504,24 +1530,24 @@ export default function AdminLiveDashboard() {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f8fafc', padding: 14, borderRadius: 8, border: '1px solid #e2e8f0' }}>
                   <div>
                     <h4 style={{ fontSize: '1.15rem', color: '#1A2B3C', fontWeight: 800, margin: 0 }}>
-                      {inspectCandidate.name || inspectCandidate.candidateName || 'Candidate'}
+                      {activeInspectCandidate.name || activeInspectCandidate.candidateName || 'Candidate'}
                     </h4>
                     <span style={{ fontSize: '0.85rem', color: '#64748b' }}>
-                      {inspectCandidate.email || inspectCandidate.candidateEmail || ''} {inspectCandidate.email || inspectCandidate.candidateEmail ? '·' : ''} Room: <strong>{roomsById[inspectCandidate.roomId] || inspectCandidate.roomName || 'Assigned Room'}</strong>
+                      {activeInspectCandidate.email || activeInspectCandidate.candidateEmail || ''} {activeInspectCandidate.email || activeInspectCandidate.candidateEmail ? '·' : ''} Room: <strong>{roomsById[activeInspectCandidate.roomId] || activeInspectCandidate.roomName || 'Assigned Room'}</strong>
                     </span>
                   </div>
                   <span
                     className="badge"
                     style={{
-                      background: `${STATUS_COLORS[inspectCandidate.colorStatus] || '#9ca3af'}20`,
-                      color: STATUS_COLORS[inspectCandidate.colorStatus] || '#374151',
-                      border: `1.5px solid ${STATUS_COLORS[inspectCandidate.colorStatus] || '#9ca3af'}`,
+                      background: `${STATUS_COLORS[activeInspectCandidate.colorStatus] || '#9ca3af'}20`,
+                      color: STATUS_COLORS[activeInspectCandidate.colorStatus] || '#374151',
+                      border: `1.5px solid ${STATUS_COLORS[activeInspectCandidate.colorStatus] || '#9ca3af'}`,
                       fontWeight: 700,
                       fontSize: '0.8rem',
                       padding: '4px 10px',
                     }}
                   >
-                    {inspectCandidate.status || inspectCandidate.colorStatus || 'ACTIVE'}
+                    {activeInspectCandidate.status || activeInspectCandidate.colorStatus || 'ACTIVE'}
                   </span>
                 </div>
 
@@ -1530,26 +1556,34 @@ export default function AdminLiveDashboard() {
                   <div>
                     <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>Questions Solved:</span>
                     <strong style={{ display: 'block', color: '#1A2B3C', fontSize: '1.1rem', marginTop: 2 }}>
-                      {inspectCandidate.status === 'NOT_STARTED' ? '—' : (inspectCandidate.questionsCompleted ?? 0)}
+                      {activeInspectCandidate.status === 'NOT_STARTED' ? '—' : (activeInspectCandidate.questionsCompleted ?? 0)}
                     </strong>
                   </div>
                   <div>
                     <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>Total Violations:</span>
-                    <strong style={{ display: 'block', color: (inspectCandidate.malpracticeCount || candidateLogs.length) > 0 ? '#E74C3C' : '#2ECC71', fontSize: '1.1rem', marginTop: 2 }}>
-                      {Math.max(inspectCandidate.malpracticeCount || 0, candidateLogs.length)}
+                    <strong style={{ display: 'block', color: (activeInspectCandidate.malpracticeCount || candidateLogs.length) > 0 ? '#E74C3C' : '#2ECC71', fontSize: '1.1rem', marginTop: 2 }}>
+                      {Math.max(activeInspectCandidate.malpracticeCount || 0, candidateLogs.length)}
                     </strong>
                   </div>
                   <div>
                     <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>Time Remaining:</span>
                     <span style={{ display: 'block', fontFamily: 'monospace', fontWeight: 700, color: '#374151', fontSize: '0.95rem', marginTop: 2 }}>
                       {(() => {
-                        const rem = getCandidateRemainingMs(inspectCandidate, now);
-                        if (inspectCandidate.status === 'SUBMITTED' || inspectCandidate.status === 'AUTO_SUBMITTED_TIME_UP') return 'Submitted';
-                        if (inspectCandidate.status === 'DISQUALIFIED') return 'Disqualified';
-                        if (inspectCandidate.status === 'NOT_STARTED') return 'Not started';
-                        if (rem > 0) return `${Math.floor(rem / 60000)}m ${Math.floor((rem % 60000) / 1000)}s`;
-                        if (inspectCandidate.candidateEndTime) return '00m 00s (Time up)';
-                        return inspectCandidate.status === 'IN_PROGRESS' ? 'In Progress' : '—';
+                        // BUG-24: Only candidates actively IN_PROGRESS have a live countdown.
+                        // Terminal or completed states (SUBMITTED, DISQUALIFIED, etc.) or NOT_STARTED show '—'.
+                        if (activeInspectCandidate.status !== 'IN_PROGRESS') {
+                          return '—';
+                        }
+                        const rem = getCandidateRemainingMs(activeInspectCandidate, now);
+                        if (rem > 0) {
+                          const mins = Math.floor(rem / 60000);
+                          const secs = Math.floor((rem % 60000) / 1000);
+                          return `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+                        }
+                        if (activeInspectCandidate.candidateEndTime) {
+                          return '00m 00s (Time up)';
+                        }
+                        return '—';
                       })()}
                     </span>
                   </div>
@@ -1572,11 +1606,11 @@ export default function AdminLiveDashboard() {
                       Loading violation proof history...
                     </div>
                   ) : candidateLogs.length === 0 ? (
-                    (inspectCandidate.malpracticeCount || 0) > 0 ? (
+                    (activeInspectCandidate.malpracticeCount || 0) > 0 ? (
                       <div style={{ background: '#fffbeb', border: '1px solid #fef3c7', color: '#b45309', padding: '16px', borderRadius: 8, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 10 }}>
                         <span style={{ fontSize: '1.4rem' }}>⚠️</span>
                         <div>
-                          <strong>Violations Recorded:</strong> {inspectCandidate.malpracticeCount} violation(s) registered for this candidate. Loading incident history...
+                          <strong>Violations Recorded:</strong> {activeInspectCandidate.malpracticeCount} violation(s) registered for this candidate. Loading incident history...
                         </div>
                       </div>
                     ) : (
