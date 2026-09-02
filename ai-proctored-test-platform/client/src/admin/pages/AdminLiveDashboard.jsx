@@ -8,7 +8,7 @@ import AdminNavbar from '../../shared/AdminNavbar';
 import api from '../../services/apiClient';
 import { useAuth } from '../../hooks/useAuthContext';
 import {
-  initSocket, emitAdminJoin,
+  initSocket, disconnectSocket, emitAdminJoin,
   onDashboardUpdate, offDashboardUpdate,
   onSeatmapStatus, offSeatmapStatus,
   onMalpracticeAlert, offMalpracticeAlert,
@@ -349,6 +349,7 @@ export default function AdminLiveDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
   // Audio Voice Announcement Toggle (FR-8.3)
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -408,6 +409,7 @@ export default function AdminLiveDashboard() {
     const fetchInitialData = async () => {
       try {
         setLoading(true);
+        setLoadError(null);
         const [testRes, roomsRes, liveRes, lateJoinRes] = await Promise.all([
           api.getTest(testId),
           api.getRooms(testId),
@@ -435,7 +437,9 @@ export default function AdminLiveDashboard() {
           setLateJoinRequests(lateJoinRes.data.requests);
         }
       } catch (err) {
-        toast.error(err.response?.data?.error || 'Failed to initialize live dashboard');
+        const errorMsg = err.response?.data?.error || err.message || 'Failed to initialize live dashboard';
+        toast.error(errorMsg);
+        if (isMounted) setLoadError(errorMsg);
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -512,12 +516,34 @@ export default function AdminLiveDashboard() {
     }
   }, [voiceEnabled]);
 
+  // Handle Allow Late Entry (Requirement 4)
+  const handleAllowLateEntry = useCallback(async (roomId, candidateId) => {
+    try {
+      await api.allowLateJoin(roomId, candidateId);
+      setLateJoinRequests((prev) => prev.filter((r) => r.candidateId !== candidateId));
+      toast.success('Late entry approved. Candidate can now enter the room.');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to allow late entry');
+    }
+  }, []);
+
+  // Handle Dismiss Late Join (Requirement 4)
+  const handleDismissLateJoin = useCallback(async (roomId, candidateId) => {
+    try {
+      await api.dismissLateJoin(roomId, candidateId);
+      setLateJoinRequests((prev) => prev.filter((r) => r.candidateId !== candidateId));
+      toast('Late join request dismissed.', { icon: '🗑️' });
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to dismiss request');
+    }
+  }, []);
+
   // ── Socket.io Connections & Event Subscriptions (Section 10) ──────────────────
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token || !user?.id) return;
 
-    const socket = initSocket(token);
+    initSocket(token);
 
     // Section 10.1: admin:join
     emitAdminJoin({ adminId: user.id, testId });
@@ -780,29 +806,7 @@ export default function AdminLiveDashboard() {
       offRoomTentativeTime(handleRoomTentativeTime);
       disconnectSocket();
     };
-  }, [testId, user?.id, flushDebounceBuffer, announceCandidateSubmission]);
-
-  // Handle Allow Late Entry (Requirement 4)
-  const handleAllowLateEntry = async (roomId, candidateId) => {
-    try {
-      await api.allowLateJoin(roomId, candidateId);
-      setLateJoinRequests((prev) => prev.filter((r) => r.candidateId !== candidateId));
-      toast.success('Late entry approved. Candidate can now enter the room.');
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to allow late entry');
-    }
-  };
-
-  // Handle Dismiss Late Join (Requirement 4)
-  const handleDismissLateJoin = async (roomId, candidateId) => {
-    try {
-      await api.dismissLateJoin(roomId, candidateId);
-      setLateJoinRequests((prev) => prev.filter((r) => r.candidateId !== candidateId));
-      toast('Late join request dismissed.', { icon: '🗑️' });
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to dismiss request');
-    }
-  };
+  }, [testId, user?.id, flushDebounceBuffer, announceCandidateSubmission, handleAllowLateEntry, handleDismissLateJoin]);
 
   // Manage Active Alert Popup from Queue
   useEffect(() => {
@@ -865,7 +869,7 @@ export default function AdminLiveDashboard() {
         },
       }));
       toast.success(`${candidate.name} has been disqualified.`);
-    } catch (err) {
+    } catch {
       toast.error('Failed to disqualify candidate');
     }
   };
@@ -1004,6 +1008,58 @@ export default function AdminLiveDashboard() {
         <AdminNavbar />
         <main className="main-content" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 400 }}>
           <div className="spinner spinner-dark" style={{ width: 40, height: 40, borderWidth: 3 }} />
+        </main>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="app-layout">
+        <AdminNavbar />
+        <main className="main-content" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 400, flexDirection: 'column', gap: 16 }}>
+          <div style={{ fontSize: '2.5rem' }}>⚠️</div>
+          <h3 style={{ color: '#1A2B3C', fontWeight: 700 }}>Unable to Load Live Monitoring</h3>
+          <p style={{ color: '#64748B', maxWidth: 460, textAlign: 'center', fontSize: '0.9rem' }}>{loadError}</p>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="btn btn-primary"
+              style={{ padding: '8px 20px', fontSize: '0.85rem' }}
+            >
+              Retry
+            </button>
+            <Link
+              to="/admin/tests"
+              className="btn btn-secondary"
+              style={{ padding: '8px 20px', fontSize: '0.85rem' }}
+            >
+              Back to Tests
+            </Link>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!test) {
+    return (
+      <div className="app-layout">
+        <AdminNavbar />
+        <main className="main-content" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 400, flexDirection: 'column', gap: 16 }}>
+          <div style={{ fontSize: '2.5rem' }}>🔍</div>
+          <h3 style={{ color: '#1A2B3C', fontWeight: 700 }}>Test Not Found</h3>
+          <p style={{ color: '#64748B', maxWidth: 460, textAlign: 'center', fontSize: '0.9rem' }}>
+            The requested test could not be found or has been removed.
+          </p>
+          <Link
+            to="/admin/tests"
+            className="btn btn-primary"
+            style={{ padding: '8px 20px', fontSize: '0.85rem' }}
+          >
+            Return to Tests
+          </Link>
         </main>
       </div>
     );

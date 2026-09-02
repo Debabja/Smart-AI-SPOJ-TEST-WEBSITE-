@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './hooks/useAuthContext';
 import './styles/global.css';
+import ErrorBoundary from './shared/ErrorBoundary';
 
 // ── Lazy-loaded pages ─────────────────────────────────────────────────────────
 // Admin panel
@@ -99,7 +100,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <ErrorBoundary>
+          <AppRoutes />
+        </ErrorBoundary>
         {/* React Hot Toast for notifications */}
         <Toaster
           position="top-right"
