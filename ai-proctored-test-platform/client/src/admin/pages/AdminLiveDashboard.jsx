@@ -5,6 +5,7 @@ import { useParams, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { List } from 'react-window';
 import AdminNavbar from '../../shared/AdminNavbar';
+import TestStatusBadge from '../../shared/TestStatusBadge';
 import api from '../../services/apiClient';
 import { useAuth } from '../../hooks/useAuthContext';
 import {
@@ -1090,16 +1091,10 @@ export default function AdminLiveDashboard() {
                 <h1 style={{ fontSize: '1.6rem', color: '#1A2B3C', fontWeight: 800 }}>
                   {test?.title}
                 </h1>
-                <span
-                  className="badge badge-success"
-                  style={{
-                    fontSize: '0.8rem',
-                    padding: '4px 10px',
-                    animation: test?.status === 'LIVE' ? 'pulse 2s infinite' : 'none',
-                  }}
-                >
-                  ● {test?.status || 'LIVE'}
-                </span>
+                <TestStatusBadge
+                  status={test?.status || 'LIVE'}
+                  style={{ fontSize: '0.8rem', padding: '4px 10px' }}
+                />
                 <span className="badge badge-primary" style={{ fontSize: '0.75rem' }}>
                   {test?.testType}
                 </span>

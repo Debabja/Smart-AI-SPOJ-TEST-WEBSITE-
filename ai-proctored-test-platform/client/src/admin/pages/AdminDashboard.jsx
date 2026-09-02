@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import AdminNavbar from '../../shared/AdminNavbar';
+import TestStatusBadge from '../../shared/TestStatusBadge';
 import { useAuth } from '../../hooks/useAuthContext';
 import api from '../../services/apiClient';
 
@@ -120,10 +121,6 @@ export default function AdminDashboard() {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {tests.slice(0, 5).map((test) => {
-                  let statusBadge = 'badge-secondary';
-                  if (test.status === 'LIVE') statusBadge = 'badge-success';
-                  if (test.status === 'ENDED') statusBadge = 'badge-info';
-
                   return (
                     <div
                       key={test._id}
@@ -142,10 +139,10 @@ export default function AdminDashboard() {
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                           <strong style={{ fontSize: '0.95rem', color: '#1A2B3C' }}>{test.title}</strong>
-                          <span className={`badge ${statusBadge}`} style={{ fontSize: '0.68rem' }}>
-                            {test.status === 'LIVE' && '● '}
-                            {test.status}
-                          </span>
+                          <TestStatusBadge
+                            status={test.status}
+                            style={{ fontSize: '0.68rem' }}
+                          />
                         </div>
                         <div style={{ fontSize: '0.78rem', color: '#6b7280' }}>
                           Type: <strong>{test.testType}</strong> · {test.durationMinutes} mins · Criteria: ≥ {test.passingCriteria} Qs

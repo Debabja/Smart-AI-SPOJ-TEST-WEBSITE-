@@ -770,6 +770,23 @@ tbody td {
   50% { opacity: 0.5; }
 }
 
+/* ── Live Status Indicator Dot Pulse (BUG-27) ────────────────────────────────── */
+@keyframes liveDotPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.live-dot-pulse {
+  display: inline-block;
+  margin-right: 4px;
+  animation: liveDotPulse 1.8s ease-in-out infinite;
+  will-change: opacity;
+}
+
 /* Use CSS transforms (not layout properties) for animations — NFR Section 13 */
 .animate-fade { animation: fadeIn 0.2s ease; }
 .animate-slide-up { animation: slideUp 0.25s ease; }

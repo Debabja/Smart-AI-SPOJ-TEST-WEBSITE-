@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import AdminNavbar from '../../shared/AdminNavbar';
+import TestStatusBadge from '../../shared/TestStatusBadge';
 import api from '../../services/apiClient';
 import {
   initSocket,
@@ -300,19 +301,10 @@ export default function AdminTestDetail() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
                 <h1 style={{ fontSize: '1.7rem', color: '#1A2B3C', fontWeight: 800 }}>{test.title}</h1>
-                <span
-                  className={`badge ${
-                    test.status === 'LIVE'
-                      ? 'badge-success'
-                      : test.status === 'ENDED'
-                      ? 'badge-info'
-                      : 'badge-secondary'
-                  }`}
+                <TestStatusBadge
+                  status={test.status}
                   style={{ fontSize: '0.8rem', padding: '4px 10px' }}
-                >
-                  {test.status === 'LIVE' && '● '}
-                  {test.status}
-                </span>
+                />
                 <span
                   className="badge"
                   style={{

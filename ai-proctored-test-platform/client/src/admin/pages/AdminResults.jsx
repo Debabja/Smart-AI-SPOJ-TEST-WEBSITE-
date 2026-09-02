@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import AdminNavbar from '../../shared/AdminNavbar';
+import TestStatusBadge from '../../shared/TestStatusBadge';
 import api from '../../services/apiClient';
 
 export default function AdminResults() {
@@ -223,14 +224,10 @@ export default function AdminResults() {
                 <h1 style={{ fontSize: '1.7rem', color: '#1A2B3C', fontWeight: 800 }}>
                   {test?.title} — Evaluation &amp; Shortlist
                 </h1>
-                <span
-                  className={`badge ${
-                    test?.status === 'ENDED' ? 'badge-info' : test?.status === 'LIVE' ? 'badge-success' : 'badge-secondary'
-                  }`}
+                <TestStatusBadge
+                  status={test?.status}
                   style={{ fontSize: '0.8rem', padding: '4px 10px' }}
-                >
-                  {test?.status}
-                </span>
+                />
                 <span className="badge badge-primary" style={{ fontSize: '0.75rem' }}>
                   {test?.testType}
                 </span>

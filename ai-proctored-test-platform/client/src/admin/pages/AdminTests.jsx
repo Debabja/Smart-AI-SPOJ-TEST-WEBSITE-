@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import AdminNavbar from '../../shared/AdminNavbar';
+import TestStatusBadge from '../../shared/TestStatusBadge';
 import api from '../../services/apiClient';
 
 const TEST_TYPES = [
@@ -261,10 +262,6 @@ export default function AdminTests() {
               </thead>
               <tbody>
                 {filteredTests.map((test) => {
-                  let statusBadgeClass = 'badge-secondary';
-                  if (test.status === 'LIVE') statusBadgeClass = 'badge-success';
-                  if (test.status === 'ENDED') statusBadgeClass = 'badge-info';
-
                   let typeBadgeColor = '#0E7C86';
                   if (test.testType === 'AI_TEST') typeBadgeColor = '#8e44ad';
                   if (test.testType === 'REACT') typeBadgeColor = '#2980b9';
@@ -295,10 +292,10 @@ export default function AdminTests() {
                         </span>
                       </td>
                       <td>
-                        <span className={`badge ${statusBadgeClass}`} style={{ fontSize: '0.75rem' }}>
-                          {test.status === 'LIVE' && '● '}
-                          {test.status}
-                        </span>
+                        <TestStatusBadge
+                          status={test.status}
+                          style={{ fontSize: '0.75rem' }}
+                        />
                       </td>
                       <td style={{ color: '#4b5563', fontSize: '0.85rem' }}>
                         {test.durationMinutes} mins
