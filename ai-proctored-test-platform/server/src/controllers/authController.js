@@ -73,6 +73,9 @@ const adminCreate = async (req, res, next) => {
     if (!name || !email || !password || !role) {
       return res.status(400).json({ error: 'name, email, password, and role are required' });
     }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
     if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       return res.status(400).json({ error: 'role must be SUPER_ADMIN or ADMIN' });
     }
@@ -108,6 +111,9 @@ const candidateRegister = async (req, res, next) => {
     const { name, email, password, phone } = req.body;
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'name, email, and password are required' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
 
     const existing = await Candidate.findOne({ email: email.toLowerCase() });

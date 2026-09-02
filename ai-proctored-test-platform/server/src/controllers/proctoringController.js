@@ -90,10 +90,14 @@ const submitFrame = [
 // Used for client-detected violations: MULTIPLE_FACES, NO_FACE_15MIN, TAB_SWITCH, FULLSCREEN_EXIT
 const reportViolation = async (req, res, next) => {
   try {
-    const { candidateId, testId, roomId, violationType, screenshotBase64 } = req.body;
+    let { candidateId, testId, roomId, violationType, screenshotBase64 } = req.body;
+
+    if (!candidateId && req.user) {
+      candidateId = req.user.id;
+    }
 
     // Validate — candidate can only report their own violations
-    if (req.user.type === 'candidate' && req.user.id !== candidateId) {
+    if (req.user.type === 'candidate' && String(req.user.id) !== String(candidateId)) {
       return res.status(403).json({ error: 'Cannot report violation for another candidate' });
     }
 

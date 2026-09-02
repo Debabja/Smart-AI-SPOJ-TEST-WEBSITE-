@@ -8,6 +8,15 @@ const path = require('path');
 
 let isAutoStartingContainers = false;
 
+const ensureJavaLanguageConfig = () => {
+  // Configures OpenJDK in Judge0 database to ensure Metaspace and GC thread limits prevent JVM crash in containers
+  const sql = "UPDATE languages SET compile_cmd = '/usr/local/openjdk13/bin/javac -J-XX:MetaspaceSize=64m -J-XX:MaxMetaspaceSize=128m %s Main.java', run_cmd = '/usr/local/openjdk13/bin/java -XX:+UseSerialGC -Xss256k -XX:CICompilerCount=2 -XX:MetaspaceSize=64m -XX:MaxMetaspaceSize=128m -Xmx256m Main' WHERE id = 62;";
+  exec(`docker exec apt_postgres psql -U judge0 -d judge0 -c "${sql}"`, () => {});
+};
+
+// Run once on load to ensure proper database command config
+ensureJavaLanguageConfig();
+
 const startJudge0Containers = () => {
   if (isAutoStartingContainers) return;
   isAutoStartingContainers = true;
@@ -20,6 +29,7 @@ const startJudge0Containers = () => {
       console.error('[Judge0] Failed to auto-start Judge0 containers:', err.message);
     } else {
       console.log('[Judge0] Containers successfully started:', stdout || stderr);
+      setTimeout(ensureJavaLanguageConfig, 3000);
     }
   });
 };
@@ -65,7 +75,7 @@ const executeCode = async (code, language, stdin = '', expectedOutput = '') => {
     ...(JUDGE0_API_KEY && { 'X-Auth-Token': JUDGE0_API_KEY }),
   };
 
-  const payload = JSON.stringify({
+  const payloadData = {
     language_id: languageId,
     source_code: code,
     stdin: stdin || '',
@@ -74,7 +84,13 @@ const executeCode = async (code, language, stdin = '', expectedOutput = '') => {
     memory_limit: 1500000,
     enable_per_process_and_thread_time_limit: true,
     enable_per_process_and_thread_memory_limit: true,
-  });
+  };
+
+  if (language === 'java') {
+    payloadData.compiler_options = '-J-XX:MetaspaceSize=64m -J-XX:MaxMetaspaceSize=128m';
+  }
+
+  const payload = JSON.stringify(payloadData);
 
   const sendToJudge0 = async (baseUrl) => {
     const url = `${baseUrl}/submissions?base64_encoded=false&wait=true`;
