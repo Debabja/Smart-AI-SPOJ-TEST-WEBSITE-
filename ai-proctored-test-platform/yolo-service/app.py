@@ -16,7 +16,7 @@ import numpy as np
 # Load YOLOv8n model on startup
 model = None
 PHONE_CLASS_ID = 67  # COCO dataset class ID for 'cell phone'
-CONFIDENCE_THRESHOLD = 0.45  # Minimum confidence to flag as phone detected
+CONFIDENCE_THRESHOLD = 0.35  # Minimum confidence to flag as phone detected (0.35 for reliable hand-held detection)
 
 
 @asynccontextmanager
@@ -81,6 +81,7 @@ def _run_inference_sync(image_bytes: bytes):
         results = model(img_array, verbose=False)
 
         phone_detections = []
+        all_detections_summary = []
         max_confidence = 0.0
 
         for result in results:
@@ -89,13 +90,24 @@ def _run_inference_sync(image_bytes: bytes):
             for box in result.boxes:
                 class_id = int(box.cls[0])
                 confidence = float(box.conf[0])
+                class_name = model.names.get(class_id, f"class_{class_id}")
+                all_detections_summary.append(f"{class_name} ({confidence:.2f})")
+
                 if class_id == PHONE_CLASS_ID and confidence >= CONFIDENCE_THRESHOLD:
                     phone_detections.append({
                         "class_id": class_id,
+                        "class_name": class_name,
                         "confidence": confidence,
                         "bbox": box.xyxy[0].tolist(),
                     })
                     max_confidence = max(max_confidence, confidence)
+
+        if phone_detections:
+            print(f"[YOLO] ⚠️ PHONE DETECTED! Max confidence: {max_confidence:.2f}. Objects in frame: {', '.join(all_detections_summary)}")
+        elif all_detections_summary:
+            print(f"[YOLO] Frame objects detected (no phone >= {CONFIDENCE_THRESHOLD:.2f}): {', '.join(all_detections_summary)}")
+        else:
+            print(f"[YOLO] Frame analyzed: no objects detected by model")
 
         return {
             "phoneDetected": len(phone_detections) > 0,

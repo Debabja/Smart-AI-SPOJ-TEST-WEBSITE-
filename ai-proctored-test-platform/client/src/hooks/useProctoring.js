@@ -536,11 +536,11 @@ export function useProctoring({
   }, [enabled, hasHardwareCamera, handleCameraDisconnected, reconnectCamera]);
 
   // ── 3. Periodic YOLO Phone Detection Frame Upload (FR-7.2) ───────────────────
-  // Sent every 7.5s (in the 5-10s range) as throttled multipart/form-data
+  // Sent every 4.5s (in the 5-10s range per PRD FR-7.2) as throttled multipart/form-data
   useEffect(() => {
     if (!enabled || !isMediaReady || !testId) return;
 
-    const frameInterval = setInterval(() => {
+    const captureAndSendFrame = () => {
       if (!videoRef.current || videoRef.current.readyState < 2) return;
 
       try {
@@ -548,6 +548,7 @@ export function useProctoring({
         canvas.width = 640;
         canvas.height = 480;
         const ctx = canvas.getContext('2d');
+        // Ensure frame is captured from the live webcam stream (videoRef), never the hidden screen share
         ctx.drawImage(videoRef.current, 0, 0, 640, 480);
 
         canvas.toBlob((blob) => {
@@ -556,16 +557,30 @@ export function useProctoring({
           formData.append('image', blob, 'webcam_frame.jpg');
 
           // Send to POST /api/v1/proctoring/:testId/frame
-          api.submitFrame(testId, formData).catch((err) => {
+          api.submitFrame(testId, formData).then((res) => {
+            if (res.data?.phoneDetected) {
+              console.warn('[Proctoring] 📱 YOLOv8 detected phone in frame!', res.data);
+              toast.error('⚠️ Mobile phone detected in camera view! Mobile devices are strictly prohibited.', { duration: 6000 });
+            } else {
+              console.log('[Proctoring] YOLOv8 frame checked: no phone detected');
+            }
+          }).catch((err) => {
             console.debug('[Proctoring] Periodic frame submit result:', err.message);
           });
         }, 'image/jpeg', 0.75);
       } catch (err) {
         console.error('[Proctoring] Frame capture error:', err);
       }
-    }, 7500); // 7.5s interval (PRD FR-7.2: every 5-10s)
+    };
 
-    return () => clearInterval(frameInterval);
+    // Initial check shortly after video is ready
+    const initialTimer = setTimeout(captureAndSendFrame, 2000);
+    const frameInterval = setInterval(captureAndSendFrame, 4500);
+
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(frameInterval);
+    };
   }, [enabled, isMediaReady, testId]);
 
   // ── 3.5. Screen Sharing Stream & Termination Monitor (BUG-13) ───────────────
