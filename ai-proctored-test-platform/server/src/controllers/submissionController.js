@@ -338,6 +338,13 @@ const startAttempt = async (req, res, next) => {
       candidateStartTime,
       candidateEndTime,
       questions,
+      submissions: createdSubmissions.map((s) => ({
+        questionId: s.questionId,
+        code: s.code,
+        language: s.language,
+        savedCodeByLanguage: s.savedCodeByLanguage || {},
+        status: s.status,
+      })),
     });
   } catch (err) {
     next(err);
@@ -352,7 +359,16 @@ const getQuestion = async (req, res, next) => {
     const projection = req.user.type === 'admin' ? {} : { hiddenTestCases: 0 };
     const question = await Question.findById(req.params.questionId, projection);
     if (!question) return res.status(404).json({ error: 'Question not found' });
-    res.json({ question });
+
+    let submission = null;
+    if (req.user?.id) {
+      submission = await Submission.findOne(
+        { candidateId: req.user.id, questionId: req.params.questionId },
+        { code: 1, language: 1, savedCodeByLanguage: 1, status: 1 }
+      );
+    }
+
+    res.json({ question, submission });
   } catch (err) {
     next(err);
   }
@@ -404,13 +420,30 @@ const saveCode = async (req, res, next) => {
     const candidateId = req.user.id;
 
     const savedAt = new Date();
-    await Submission.findOneAndUpdate(
+    const lang = language || 'python';
+    // ASSUMPTION: Update both active code/language and per-language savedCodeByLanguage map
+    const update = {
+      code: code ?? '',
+      language: lang,
+      [`savedCodeByLanguage.${lang}`]: code ?? '',
+    };
+
+    const submission = await Submission.findOneAndUpdate(
       { candidateId, questionId },
-      { code, language, $setOnInsert: { status: 'IN_PROGRESS' } },
-      { upsert: false } // only update existing, don't create
+      {
+        $set: update,
+        $setOnInsert: { status: 'IN_PROGRESS' },
+      },
+      { upsert: true, new: true }
     );
 
-    res.json({ success: true, savedAt });
+    res.json({
+      success: true,
+      savedAt,
+      code: code ?? '',
+      language: lang,
+      savedCodeByLanguage: submission?.savedCodeByLanguage || {},
+    });
   } catch (err) {
     next(err);
   }

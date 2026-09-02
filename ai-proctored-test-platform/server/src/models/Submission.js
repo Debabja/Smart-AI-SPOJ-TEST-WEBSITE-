@@ -10,6 +10,12 @@ const submissionSchema = new mongoose.Schema({
   // for AI Test: { "index.html": "...", "style.css": "..." }
   filesJson: { type: Object, default: null },
   language: { type: String },
+  // ASSUMPTION: Store draft/autosaved code per-language per-question so switching language preserves each language's progress
+  savedCodeByLanguage: {
+    type: Map,
+    of: String,
+    default: {},
+  },
   // AI Test only: every chat message and AI reply (FR-6.2)
   promptLog: [
     {

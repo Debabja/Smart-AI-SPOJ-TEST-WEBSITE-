@@ -200,6 +200,7 @@ export default function CandidateInstructions() {
           test: joinData.test,
           room: joinData.room,
           questions: data.questions,
+          submissions: data.submissions || [],
           candidateStartTime: data.candidateStartTime,
           candidateEndTime: data.candidateEndTime,
           submissionSessionId: data.submissionSessionId,

@@ -161,6 +161,7 @@ export default function CandidateTestScreen() {
   const [activeQuestionIdx, setActiveQuestionIdx] = useState(0);
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('python');
+  const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
   const [customInput, setCustomInput] = useState('');
   const [runResults, setRunResults] = useState([]);
   const [runOutput, setRunOutput] = useState('');
@@ -173,6 +174,11 @@ export default function CandidateTestScreen() {
   const [loadError, setLoadError] = useState('');
   const heartbeatRef = useRef(null);
   const isSubmittingAll = useRef(false);
+  const saveStatusTimerRef = useRef(null);
+  const debounceTimerRef = useRef(null);
+  const codeRef = useRef('');
+  const languageRef = useRef('python');
+  const activeQuestionRef = useRef(null);
 
   // ── Resizable & Collapsible Questions Panel (BUG-10) ────────────────────────
   const [isCollapsed, setIsCollapsed] = useState(() => {
@@ -389,6 +395,23 @@ export default function CandidateTestScreen() {
       }
       setSession(s);
       setLanguage(s.test.supportedLanguages?.[0] || 'python');
+
+      // BUG-25: Populate draft cache from stored submissions (if resuming / rejoining)
+      if (s.submissions && Array.isArray(s.submissions)) {
+        s.submissions.forEach((sub) => {
+          if (sub.status === 'SUBMITTED' || sub.status === 'AUTO_SUBMITTED_TIME_UP') {
+            setSubmittedQuestions((prev) => new Set([...prev, sub.questionId]));
+          }
+          if (sub.savedCodeByLanguage) {
+            Object.entries(sub.savedCodeByLanguage).forEach(([lang, c]) => {
+              sessionStorage.setItem(`draft_${s.test._id}_${sub.questionId}_${lang}`, c);
+            });
+          }
+          if (sub.language && sub.code) {
+            sessionStorage.setItem(`draft_${s.test._id}_${sub.questionId}_${sub.language}`, sub.code);
+          }
+        });
+      }
     } catch (err) {
       console.error('Failed to parse test session:', err);
       setLoadError('Failed to read test session data. Please rejoin the room.');
@@ -396,6 +419,9 @@ export default function CandidateTestScreen() {
   }, []);
 
   const activeQuestion = session?.questions?.[activeQuestionIdx];
+  activeQuestionRef.current = activeQuestion;
+  codeRef.current = code;
+  languageRef.current = language;
 
   // ── FR-5.6: Server-side auto-submit is already handled by server timer.
   // Client-side timer expiry triggers submit-all as backup.
@@ -492,21 +518,88 @@ export default function CandidateTestScreen() {
     toast('Copy-paste is disabled during the test.', { icon: '🚫', duration: 2000 });
   }, []);
 
-  // ── Autosave every 30s (NFR §13 Availability) ────────────────────────────────
+  // ── Autosave Helper (Saves to both sessionStorage and Backend POST /submissions/:qId/save) ──
+  const saveCodeToBackend = useCallback(async (qId, lang, codeToSave) => {
+    if (!qId || codeToSave === undefined || isSubmittingAll.current) return;
+    try {
+      setSaveStatus('saving');
+      // 1. Synchronously persist to sessionStorage under per-question per-language key
+      if (session?.test?._id) {
+        const key = `draft_${session.test._id}_${qId}_${lang}`;
+        sessionStorage.setItem(key, codeToSave);
+      }
+
+      // 2. Call backend POST /submissions/:questionId/save (no evaluation)
+      await api.saveCode(qId, { code: codeToSave, language: lang });
+
+      setSaveStatus('saved');
+      if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = setTimeout(() => {
+        setSaveStatus('idle');
+      }, 2500);
+    } catch (err) {
+      console.error('[Autosave] Error saving code:', err);
+      setSaveStatus('error');
+      if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = setTimeout(() => {
+        setSaveStatus('idle');
+      }, 3500);
+    }
+  }, [session?.test?._id]);
+
+  // ── Question Switch Handler (Requirement 1: Autosave before navigating away) ──
+  const handleSelectQuestion = useCallback((newIdx) => {
+    if (newIdx === activeQuestionIdx) return;
+    if (activeQuestionRef.current && codeRef.current !== undefined) {
+      saveCodeToBackend(activeQuestionRef.current._id, languageRef.current, codeRef.current);
+    }
+    setActiveQuestionIdx(newIdx);
+  }, [activeQuestionIdx, saveCodeToBackend]);
+
+  // ── Language Change Handler (Requirement 2: Autosave code under current language before switching) ──
+  const handleLanguageChange = useCallback((newLang) => {
+    if (newLang === languageRef.current) return;
+    if (activeQuestionRef.current && codeRef.current !== undefined) {
+      saveCodeToBackend(activeQuestionRef.current._id, languageRef.current, codeRef.current);
+    }
+    setLanguage(newLang);
+  }, [saveCodeToBackend]);
+
+  // ── Code Change Handler (Debounced typing autosave + instant synchronous local persistence) ──
+  const handleCodeChange = useCallback((val) => {
+    const newCode = val || '';
+    setCode(newCode);
+    codeRef.current = newCode;
+
+    // Instant local sync
+    if (activeQuestionRef.current && session?.test?._id) {
+      const key = `draft_${session.test._id}_${activeQuestionRef.current._id}_${languageRef.current}`;
+      sessionStorage.setItem(key, newCode);
+    }
+
+    // Debounce background API save (after 2s of inactivity)
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      if (activeQuestionRef.current && !disqualified) {
+        saveCodeToBackend(activeQuestionRef.current._id, languageRef.current, newCode);
+      }
+    }, 2000);
+  }, [session?.test?._id, disqualified, saveCodeToBackend]);
+
+  // ── Periodic Autosave every 20s as Safety Net (Requirements 3 & 4) ────────────
   useAutosave(
     useCallback(async () => {
-      if (!activeQuestion || !code || disqualified) return;
-      try {
-        await api.saveCode(activeQuestion._id, { code, language });
-      } catch (_) {}
-    }, [activeQuestion, code, language, disqualified]),
-    30000,
+      if (!activeQuestionRef.current || codeRef.current === undefined || disqualified) return;
+      saveCodeToBackend(activeQuestionRef.current._id, languageRef.current, codeRef.current);
+    }, [disqualified, saveCodeToBackend]),
+    20000,
     !!session && !disqualified
   );
 
   // ── Run code against visible test cases ──────────────────────────────────────
   const handleRun = async () => {
     if (!activeQuestion || !code) return;
+    saveCodeToBackend(activeQuestion._id, language, code);
     setIsRunning(true);
     setRunResults([]);
     setRunOutput('');
@@ -532,6 +625,10 @@ export default function CandidateTestScreen() {
       const { data } = await api.submitCode(activeQuestion._id, { code, language });
       const sub = data.submission;
       setSubmittedQuestions((prev) => new Set([...prev, activeQuestion._id]));
+      if (session?.test?._id) {
+        const key = `draft_${session.test._id}_${activeQuestion._id}_${language}`;
+        sessionStorage.setItem(key, code);
+      }
       setQuestionProgress((prev) => ({
         ...prev,
         [activeQuestion._id]: {
@@ -561,28 +658,74 @@ export default function CandidateTestScreen() {
     }
   };
 
-  // Set starter code or saved draft when question or language changes
+  const defaultTemplates = useMemo(() => ({
+    python: `# Q${activeQuestionIdx + 1}: ${activeQuestion?.title || 'Solution'}\nimport sys\n\ndef solve():\n    # Write your solution here\n    pass\n\nif __name__ == '__main__':\n    solve()\n`,
+    javascript: `// Q${activeQuestionIdx + 1}: ${activeQuestion?.title || 'Solution'}\nfunction solve() {\n    // Write your solution here\n}\n`,
+    cpp: `// Q${activeQuestionIdx + 1}: ${activeQuestion?.title || 'Solution'}\n#include <iostream>\n#include <vector>\n#include <string>\nusing namespace std;\n\nint main() {\n    // Write your solution here\n    return 0;\n}\n`,
+    c: `// Q${activeQuestionIdx + 1}: ${activeQuestion?.title || 'Solution'}\n#include <stdio.h>\n\nint main() {\n    // Write your solution here\n    return 0;\n}\n`,
+    java: `// Q${activeQuestionIdx + 1}: ${activeQuestion?.title || 'Solution'}\nimport java.util.*;\n\npublic class Main {\n    public static void main(String[] args) {\n        // Write your solution here\n        Scanner sc = new Scanner(System.in);\n    }\n}\n`,
+    react: `// Q${activeQuestionIdx + 1}: ${activeQuestion?.title || 'Solution'}\nimport React from 'react';\n\nexport default function Solution() {\n    return (\n        <div>\n            {/* Write your React solution here */}\n        </div>\n    );\n}\n`,
+  }), [activeQuestionIdx, activeQuestion?.title]);
+
+  // Set starter code or restore saved draft when question or language changes
   useEffect(() => {
-    if (!activeQuestion) {
+    if (!activeQuestion || !session?.test?._id) {
       setCode('');
+      codeRef.current = '';
       return;
     }
-    const key = `draft_${session?.test?._id}_${activeQuestion._id}_${language}`;
+
+    const key = `draft_${session.test._id}_${activeQuestion._id}_${language}`;
     const saved = sessionStorage.getItem(key);
+
     if (saved !== null) {
       setCode(saved);
-    } else {
-      const defaultTemplates = {
-        python: `# Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\nimport sys\n\ndef solve():\n    # Write your solution here\n    pass\n\nif __name__ == '__main__':\n    solve()\n`,
-        javascript: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\nfunction solve() {\n    // Write your solution here\n}\n`,
-        cpp: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\n#include <iostream>\n#include <vector>\n#include <string>\nusing namespace std;\n\nint main() {\n    // Write your solution here\n    return 0;\n}\n`,
-        c: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\n#include <stdio.h>\n\nint main() {\n    // Write your solution here\n    return 0;\n}\n`,
-        java: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\nimport java.util.*;\n\npublic class Main {\n    public static void main(String[] args) {\n        // Write your solution here\n        Scanner sc = new Scanner(System.in);\n    }\n}\n`,
-        react: `// Q${activeQuestionIdx + 1}: ${activeQuestion.title || 'Solution'}\nimport React from 'react';\n\nexport default function Solution() {\n    return (\n        <div>\n            {/* Write your React solution here */}\n        </div>\n    );\n}\n`,
-      };
-      setCode(defaultTemplates[language] || '// Write your solution here\n');
+      codeRef.current = saved;
+      return;
     }
-  }, [activeQuestion, language, activeQuestionIdx, session?.test?._id]);
+
+    // Restore from backend if not yet in local storage (e.g. reload / first open)
+    let isMounted = true;
+    api.getQuestion(session.test._id, activeQuestion._id)
+      .then((res) => {
+        if (!isMounted) return;
+        const sub = res.data?.submission;
+        let restoredCode = null;
+
+        if (sub) {
+          if (sub.status === 'SUBMITTED' || sub.status === 'AUTO_SUBMITTED_TIME_UP') {
+            setSubmittedQuestions((prev) => new Set([...prev, activeQuestion._id]));
+          }
+          if (sub.savedCodeByLanguage && sub.savedCodeByLanguage[language]) {
+            restoredCode = sub.savedCodeByLanguage[language];
+          } else if (sub.language === language && sub.code) {
+            restoredCode = sub.code;
+          }
+        }
+
+        if (restoredCode !== null) {
+          sessionStorage.setItem(key, restoredCode);
+          setCode(restoredCode);
+          codeRef.current = restoredCode;
+        } else {
+          const tmpl = defaultTemplates[language] || '// Write your solution here\n';
+          sessionStorage.setItem(key, tmpl);
+          setCode(tmpl);
+          codeRef.current = tmpl;
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        const tmpl = defaultTemplates[language] || '// Write your solution here\n';
+        sessionStorage.setItem(key, tmpl);
+        setCode(tmpl);
+        codeRef.current = tmpl;
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeQuestion?._id, language, session?.test?._id, defaultTemplates]);
 
   if (loadError) {
     return (
@@ -786,7 +929,7 @@ export default function CandidateTestScreen() {
                 visibleTotal={questionProgress[q._id]?.total || q.visibleTestCases?.length || 0}
                 isSubmitted={submittedQuestions.has(q._id)}
                 isCollapsed={isCollapsed}
-                onClick={() => setActiveQuestionIdx(idx)}
+                onClick={() => handleSelectQuestion(idx)}
               />
             ))
           )}
@@ -955,7 +1098,7 @@ export default function CandidateTestScreen() {
                 <select
                   id="language-select"
                   value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
+                  onChange={(e) => handleLanguageChange(e.target.value)}
                   style={{
                     background: '#2d2d44', color: 'white', border: '1px solid #444',
                     borderRadius: 6, padding: '4px 10px', fontSize: '0.85rem',
@@ -966,6 +1109,24 @@ export default function CandidateTestScreen() {
                     <option key={lang} value={lang}>{lang.toUpperCase()}</option>
                   ))}
                 </select>
+
+                {/* Visual Autosave Status Indicator (Requirement 6) */}
+                {saveStatus === 'saving' && (
+                  <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <span className="spinner" style={{ width: 10, height: 10, borderTopColor: '#94a3b8', display: 'inline-block' }} />
+                    Saving...
+                  </span>
+                )}
+                {saveStatus === 'saved' && (
+                  <span style={{ fontSize: '0.75rem', color: '#2ECC71', fontWeight: 600 }}>
+                    ✓ Saved
+                  </span>
+                )}
+                {saveStatus === 'error' && (
+                  <span style={{ fontSize: '0.75rem', color: '#E74C3C', fontWeight: 600 }}>
+                    ⚠️ Save failed
+                  </span>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
@@ -996,7 +1157,7 @@ export default function CandidateTestScreen() {
                 height="100%"
                 language={LANGUAGE_MAP[language] || 'python'}
                 value={code}
-                onChange={(val) => setCode(val || '')}
+                onChange={handleCodeChange}
                 theme="vs-dark"
                 options={{
                   fontSize: 14,
@@ -1025,6 +1186,12 @@ export default function CandidateTestScreen() {
                     2048 | 52,
                     () => toast('Paste is disabled during the test.', { icon: '🚫', duration: 1500 })
                   );
+                  // Autosave on blur (Requirement 3)
+                  editor.onDidBlurEditorText(() => {
+                    if (activeQuestionRef.current && !disqualified && codeRef.current !== undefined) {
+                      saveCodeToBackend(activeQuestionRef.current._id, languageRef.current, codeRef.current);
+                    }
+                  });
                 }}
               />
             </div>
