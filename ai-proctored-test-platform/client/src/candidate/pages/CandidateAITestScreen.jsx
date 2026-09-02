@@ -455,7 +455,7 @@ export default function CandidateAITestScreen() {
               id="ai-submit-all-btn"
               className="btn btn-danger btn-sm"
               onClick={handleSubmitAll}
-              disabled={isSubmittingAll.current || disqualified || proctoring?.isCameraDisconnected}
+              disabled={isSubmittingAll.current || disqualified}
               style={{ fontWeight: 700, padding: '6px 16px' }}
             >
               Submit All &amp; Finish
@@ -782,13 +782,14 @@ export default function CandidateAITestScreen() {
         </div>
       )}
 
-      {/* Camera Disconnected Full-Screen Opaque Blackout Overlay */}
+      {/* Camera Disconnected Full-Screen Blocking Overlay (BUG-29) */}
       <CameraDisconnectedOverlay
         isVisible={Boolean(proctoring?.isCameraDisconnected)}
         timerDisplay={timerDisplay}
         hasHardwareCamera={Boolean(proctoring?.hasHardwareCamera)}
         isVerifyingFace={Boolean(proctoring?.isVerifyingFace)}
         onRetry={proctoring?.reconnectCamera}
+        onSubmitAll={handleSubmitAll}
         videoRef={proctoring?.videoRef}
       />
     </div>

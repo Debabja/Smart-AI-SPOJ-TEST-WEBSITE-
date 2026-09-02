@@ -200,7 +200,7 @@ export function useProctoring({
     }
   }, [candidateId, testId, roomId, captureViolationProof]);
 
-  // ── Camera Disconnect Handler (Immediate Fullscreen Blackout & Lockdown) ────
+  // ── Camera Disconnect Handler (Immediate Fullscreen Blocking & Lockdown) ────
   const handleCameraDisconnected = useCallback(() => {
     if (isCameraDisconnectedRef.current) return;
     isCameraDisconnectedRef.current = true;
@@ -213,7 +213,7 @@ export function useProctoring({
     noFaceStartTimeRef.current = null;
     noFaceReportedRef.current = false;
 
-    console.warn('[Proctoring] CAMERA_DISCONNECTED triggered! Locking screen and alerting server.');
+    console.warn('[Proctoring] CAMERA_DISCONNECTED triggered! Blocking screen and alerting server.');
     const proof = captureViolationProof('CAMERA_DISCONNECTED');
 
     const curCandidateId = candidateIdRef.current || candidateId;
@@ -229,12 +229,70 @@ export function useProctoring({
     }).catch((err) => console.error('[Proctoring] Failed to report camera disconnect:', err));
   }, [candidateId, testId, roomId, captureViolationProof]);
 
+  // ── Camera Reconnect Handler (Immediate Recovery & Dismissal) ───────────────
+  const handleCameraReconnected = useCallback(() => {
+    if (!isCameraDisconnectedRef.current) return;
+    const reconnectTime = Date.now();
+    const durationSec = Math.max(
+      1,
+      Math.round((reconnectTime - (cameraDisconnectTimeRef.current || reconnectTime)) / 1000)
+    );
+
+    console.log(`[Proctoring] Camera reconnected! Disconnected duration: ${durationSec}s`);
+    const curCandidateId = candidateIdRef.current || candidateId;
+    const curTestId = testIdRef.current || testId;
+    const curRoomId = roomIdRef.current || roomId;
+
+    api.reportCameraReconnected({
+      candidateId: curCandidateId,
+      testId: curTestId,
+      roomId: curRoomId,
+      reconnectAt: new Date(reconnectTime),
+      durationSeconds: durationSec,
+    }).catch((err) => console.error('[Proctoring] Failed to report camera reconnect:', err));
+
+    isCameraDisconnectedRef.current = false;
+    setIsCameraDisconnected(false);
+    setIsVerifyingFace(false);
+    setHasHardwareCamera(true);
+    toast.success('Camera verified and reconnected. Test resumed.');
+  }, [candidateId, testId, roomId]);
+
+  // ── Track Listener Helper (Handles onended and onmute for physical disconnection) ──
+  const attachTrackListeners = useCallback((stream) => {
+    if (!stream) return;
+    const videoTracks = stream.getVideoTracks();
+    if (videoTracks.length > 0) {
+      const track = videoTracks[0];
+      track.onended = () => {
+        console.warn('[Proctoring] videoTrack onended dispatched');
+        handleCameraDisconnected();
+      };
+      track.onmute = () => {
+        console.warn('[Proctoring] videoTrack onmute dispatched');
+        handleCameraDisconnected();
+      };
+    }
+    stream.onremovetrack = () => {
+      console.warn('[Proctoring] stream onremovetrack dispatched');
+      handleCameraDisconnected();
+    };
+    stream.oninactive = () => {
+      console.warn('[Proctoring] stream oninactive dispatched');
+      handleCameraDisconnected();
+    };
+  }, [handleCameraDisconnected]);
+
   useEffect(() => {
     window.__simulateCameraDisconnect = () => {
       const tracks = streamRef.current?.getVideoTracks() || [];
       tracks.forEach((t) => {
         t.stop();
+        try {
+          Object.defineProperty(t, 'muted', { value: true, writable: true });
+        } catch {}
         t.dispatchEvent(new Event('ended'));
+        t.dispatchEvent(new Event('mute'));
       });
       handleCameraDisconnected();
     };
@@ -243,7 +301,7 @@ export function useProctoring({
     };
   }, [handleCameraDisconnected]);
 
-  // ── Camera Reconnect Attempt ────────────────────────────────────────────────
+  // ── Camera Reconnect Attempt (via Manual Retry button or Auto-Detection) ───
   const reconnectCamera = useCallback(async () => {
     try {
       console.log('[Proctoring] Attempting to reconnect camera stream...');
@@ -253,12 +311,7 @@ export function useProctoring({
       });
 
       streamRef.current = stream;
-      const videoTracks = stream.getVideoTracks();
-      if (videoTracks.length > 0) {
-        videoTracks[0].onended = () => {
-          handleCameraDisconnected();
-        };
-      }
+      attachTrackListeners(stream);
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -266,7 +319,10 @@ export function useProctoring({
       }
 
       setHasHardwareCamera(true);
-      setIsVerifyingFace(true); // Re-acquired video, scanning with MediaPipe for face
+      setIsVerifyingFace(true);
+
+      // Re-acquired live stream — dismiss overlay & resume test
+      handleCameraReconnected();
       return stream;
     } catch (err) {
       console.warn('[Proctoring] Camera reconnect failed or still disconnected:', err.message);
@@ -274,7 +330,7 @@ export function useProctoring({
       setIsVerifyingFace(false);
       return null;
     }
-  }, [handleCameraDisconnected]);
+  }, [attachTrackListeners, handleCameraReconnected]);
 
   // ── 1. Mandatory Media Stream Initialization (FR-5.2) ───────────────────────
   const initMediaStream = useCallback(async () => {
@@ -285,14 +341,10 @@ export function useProctoring({
       });
 
       streamRef.current = stream;
+      attachTrackListeners(stream);
+
       const videoTracks = stream.getVideoTracks();
       const audioTracks = stream.getAudioTracks();
-
-      if (videoTracks.length > 0) {
-        videoTracks[0].onended = () => {
-          handleCameraDisconnected();
-        };
-      }
 
       setHasWebcam(videoTracks.length > 0 && videoTracks[0].enabled);
       setHasMic(audioTracks.length > 0 && audioTracks[0].enabled);
@@ -312,7 +364,7 @@ export function useProctoring({
       toast.error('Webcam and Microphone permissions are required to take this assessment.');
       return null;
     }
-  }, []);
+  }, [attachTrackListeners]);
 
   // ── 2. Official MediaPipe FaceDetector Task Initialization (PRD §15) ────────
   // Uses MediaPipe BlazeFace short-range vision model for in-browser face count detection
@@ -392,19 +444,31 @@ export function useProctoring({
       if (isCancelled || !faceDetectorRef.current) return;
 
       const videoTrack = streamRef.current?.getVideoTracks()?.[0];
-      const isTrackEnded = !videoTrack || videoTrack.readyState === 'ended' || !videoTrack.enabled;
-      const isVideoUnavailable = !videoRef.current || videoRef.current.readyState < 2;
+      const isTrackEnded =
+        !videoTrack ||
+        videoTrack.readyState === 'ended' ||
+        videoTrack.muted ||
+        !videoTrack.enabled;
+      const isVideoUnavailable =
+        !videoRef.current ||
+        videoRef.current.readyState < 2 ||
+        videoRef.current.paused ||
+        videoRef.current.ended;
 
-      // ── Physical Camera Disconnect Check ────────────────────────────────────
-      if (isTrackEnded) {
+      // ── Physical Camera Disconnect Check (Immediate Fullscreen Blocking) ────
+      if (isTrackEnded || (isVideoUnavailable && isMediaReady)) {
         if (!isCameraDisconnectedRef.current) {
           handleCameraDisconnected();
         }
         return;
       }
 
-      if (isVideoUnavailable) {
-        return;
+      // ── Auto-Recovery: If camera was disconnected, restore access once stream is active & live ──
+      if (isCameraDisconnectedRef.current) {
+        if (videoTrack && videoTrack.readyState === 'live' && !videoTrack.muted && !isVideoUnavailable) {
+          handleCameraReconnected();
+        }
+        return; // Suppress violation processing while recovering
       }
 
       try {
@@ -424,38 +488,6 @@ export function useProctoring({
 
         const detectedFaces = validDetections.length;
         setFaceCount(detectedFaces);
-
-        // ── Auto-Recovery: If camera was disconnected, restore access once face is verified ──
-        if (isCameraDisconnectedRef.current) {
-          if (detectedFaces >= 1 || window.__simulateFaceDetectedForTest) {
-            window.__simulateFaceDetectedForTest = false;
-            const reconnectTime = Date.now();
-            const durationSec = Math.max(
-              1,
-              Math.round((reconnectTime - (cameraDisconnectTimeRef.current || reconnectTime)) / 1000)
-            );
-
-            console.log(`[Proctoring] Camera reconnected and face verified! Disconnected duration: ${durationSec}s`);
-            const curCandidateId = candidateIdRef.current || candidateId;
-            const curTestId = testIdRef.current || testId;
-            const curRoomId = roomIdRef.current || roomId;
-
-            api.reportCameraReconnected({
-              candidateId: curCandidateId,
-              testId: curTestId,
-              roomId: curRoomId,
-              reconnectAt: new Date(reconnectTime),
-              durationSeconds: durationSec,
-            }).catch((err) => console.error('[Proctoring] Failed to report camera reconnect:', err));
-
-            isCameraDisconnectedRef.current = false;
-            setIsCameraDisconnected(false);
-            setIsVerifyingFace(false);
-            setHasHardwareCamera(true);
-            toast.success('Camera verified and face detected. Test resumed.');
-          }
-          return; // Suppress other violation processing while recovering
-        }
 
         // FR-7.1: Multiple faces detected violation — requires 2 consecutive positive checks (2s) to avoid single-frame glitch
         if (detectedFaces > 1) {
@@ -497,7 +529,7 @@ export function useProctoring({
       isCancelled = true;
       if (detectionInterval) clearInterval(detectionInterval);
     };
-  }, [enabled, isMediaReady, detectorReady, captureWebcamScreenshot, reportViolation, handleCameraDisconnected, candidateId, testId, roomId]);
+  }, [enabled, isMediaReady, detectorReady, captureWebcamScreenshot, reportViolation, handleCameraDisconnected, handleCameraReconnected]);
 
   // ── Auto-Detection & Device Change Listener for Reconnect / Disconnect ──────
   useEffect(() => {
@@ -506,10 +538,21 @@ export function useProctoring({
     const checkDevices = async () => {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const hasVideo = devices.some((d) => d.kind === 'videoinput');
+        const videoDevices = devices.filter((d) => d.kind === 'videoinput');
         const currentTrack = streamRef.current?.getVideoTracks()?.[0];
 
-        if (!hasVideo || !currentTrack || currentTrack.readyState === 'ended') {
+        const isTrackDead =
+          !currentTrack ||
+          currentTrack.readyState === 'ended' ||
+          currentTrack.muted ||
+          !currentTrack.enabled;
+
+        const currentDeviceId = currentTrack?.getSettings()?.deviceId;
+        const activeDeviceGone = currentDeviceId
+          ? !videoDevices.some((d) => d.deviceId === currentDeviceId)
+          : videoDevices.length === 0;
+
+        if (videoDevices.length === 0 || isTrackDead || activeDeviceGone) {
           if (!isCameraDisconnectedRef.current) {
             handleCameraDisconnected();
           }

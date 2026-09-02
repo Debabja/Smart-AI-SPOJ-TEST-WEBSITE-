@@ -1,7 +1,7 @@
 // CandidateTestScreen — Standard Coding Test (SPOJ / JAVASCRIPT / REACT types)
 // Implements FR-5.1 through FR-5.6 (§11.5)
 // NFR: 60fps timer, autosave every 30s, debounced socket heartbeat
-import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../../services/apiClient';
@@ -823,7 +823,7 @@ export default function CandidateTestScreen() {
               id="submit-all-btn"
               className="btn btn-danger btn-sm"
               onClick={handleSubmitAll}
-              disabled={isSubmittingAll.current || disqualified || proctoring?.isCameraDisconnected}
+              disabled={isSubmittingAll.current || disqualified}
               style={{ fontWeight: 700, padding: '6px 16px' }}
             >
               Submit All &amp; Finish
@@ -1355,13 +1355,14 @@ export default function CandidateTestScreen() {
         </div>
       )}
 
-      {/* Camera Disconnected Full-Screen Opaque Blackout Overlay */}
+      {/* Camera Disconnected Full-Screen Blocking Overlay (BUG-29) */}
       <CameraDisconnectedOverlay
         isVisible={Boolean(proctoring?.isCameraDisconnected)}
         timerDisplay={timerDisplay}
         hasHardwareCamera={Boolean(proctoring?.hasHardwareCamera)}
         isVerifyingFace={Boolean(proctoring?.isVerifyingFace)}
         onRetry={proctoring?.reconnectCamera}
+        onSubmitAll={handleSubmitAll}
         videoRef={proctoring?.videoRef}
       />
     </div>
