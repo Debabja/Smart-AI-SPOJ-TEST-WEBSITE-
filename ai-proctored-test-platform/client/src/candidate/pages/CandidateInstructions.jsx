@@ -14,6 +14,7 @@ export default function CandidateInstructions() {
   const [micGranted, setMicGranted] = useState(false);
   const [screenGranted, setScreenGranted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [requestingPermissions, setRequestingPermissions] = useState(false);
   const [error, setError] = useState('');
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -55,9 +56,11 @@ export default function CandidateInstructions() {
   // FR-5.2: Mandatory Webcam, Mic, and Screen Sharing permission check (BUG-08, BUG-13)
   const requestMediaPermissions = async () => {
     setError('');
+    setRequestingPermissions(true);
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setError('Your browser does not support media access. Please use modern Chrome or Edge.');
+      setRequestingPermissions(false);
       return;
     }
 
@@ -162,6 +165,8 @@ export default function CandidateInstructions() {
       } else {
         setError('Camera, microphone, and Entire Screen sharing access are mandatory. Please grant permissions and try again.');
       }
+    } finally {
+      setRequestingPermissions(false);
     }
   };
 
@@ -233,7 +238,7 @@ export default function CandidateInstructions() {
         />
       </div>
 
-      <div style={{ flex: 1, padding: 32, maxWidth: 900, margin: '0 auto', width: '100%' }}>
+      <div style={{ flex: 1, padding: 32, maxWidth: 960, margin: '0 auto', width: '100%' }}>
         <div style={{ marginBottom: 24 }}>
           <span className="badge badge-teal" style={{ marginBottom: 8 }}>
             {joinData.test.testType}
@@ -252,7 +257,7 @@ export default function CandidateInstructions() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 24 }}>
           {/* Instructions */}
           <div className="card">
             <div className="card-header">
@@ -368,10 +373,48 @@ export default function CandidateInstructions() {
                 <button
                   id="grant-media-btn"
                   className="btn btn-secondary"
-                  style={{ width: '100%', fontWeight: 600 }}
+                  style={{
+                    width: '100%',
+                    fontWeight: 600,
+                    fontSize: '0.8rem',
+                    padding: '10px 8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    whiteSpace: 'normal',
+                    lineHeight: 1.3,
+                    boxSizing: 'border-box',
+                    overflow: 'hidden',
+                  }}
                   onClick={requestMediaPermissions}
+                  disabled={requestingPermissions}
                 >
-                  📷🖥️ Grant Camera, Mic &amp; Screen Access
+                  {requestingPermissions ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span className="spinner spinner-dark" style={{ width: 14, height: 14 }} />
+                      <span>Requesting Permissions...</span>
+                    </span>
+                  ) : (
+                    <>
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          flexShrink: 0,
+                          fontSize: '0.95rem',
+                          lineHeight: 1,
+                        }}
+                      >
+                        <span>📷</span>
+                        <span>🖥️</span>
+                      </span>
+                      <span style={{ display: 'inline', textAlign: 'center' }}>
+                        Grant Camera, Mic &amp; Screen Access
+                      </span>
+                    </>
+                  )}
                 </button>
               ) : (
                 <div className="alert alert-success" style={{ margin: 0, fontSize: '0.8rem' }}>

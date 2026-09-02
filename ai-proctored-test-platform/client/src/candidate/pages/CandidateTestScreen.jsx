@@ -1188,9 +1188,6 @@ export default function CandidateTestScreen() {
         </div>
       )}
 
-      {/* Movable AI Proctoring PIP Feed */}
-      <DraggableWebcamPip videoRef={proctoring.videoRef} faceCount={proctoring.faceCount} />
-
       {/* Camera Disconnected Full-Screen Opaque Blackout Overlay */}
       <CameraDisconnectedOverlay
         isVisible={Boolean(proctoring?.isCameraDisconnected)}
