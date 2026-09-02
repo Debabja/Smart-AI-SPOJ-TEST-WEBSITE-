@@ -677,6 +677,28 @@ export function useProctoring({
     };
   }, [enabled, captureViolationProof, reportViolation]);
 
+  // ── Keyboard Lock API Helpers (Disables Alt+Tab, Escape, Meta in Fullscreen) ──
+  const lockKeyboard = useCallback(async () => {
+    if ('keyboard' in navigator && typeof navigator.keyboard.lock === 'function') {
+      try {
+        await navigator.keyboard.lock();
+        console.log('[Proctoring] Keyboard lock engaged (Alt+Tab and system shortcuts restricted)');
+      } catch (err) {
+        console.warn('[Proctoring] Keyboard lock could not be engaged:', err?.message || err);
+      }
+    }
+  }, []);
+
+  const unlockKeyboard = useCallback(() => {
+    if ('keyboard' in navigator && typeof navigator.keyboard.unlock === 'function') {
+      try {
+        navigator.keyboard.unlock();
+      } catch (err) {
+        console.warn('[Proctoring] Keyboard unlock failed:', err?.message || err);
+      }
+    }
+  }, []);
+
   // ── 4. Fullscreen Enforcement & Exit Detection (FR-5.2, FR-5.3) ─────────────
   useEffect(() => {
     if (!enabled) return;
@@ -685,7 +707,10 @@ export function useProctoring({
       const inFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
       setIsFullscreen(inFullscreen);
 
-      if (!inFullscreen) {
+      if (inFullscreen) {
+        lockKeyboard();
+      } else {
+        unlockKeyboard();
         emitFullscreenExit({ candidateId, testId, roomId });
         const proof = captureViolationProof('FULLSCREEN_EXIT');
         reportViolation('FULLSCREEN_EXIT', proof);
@@ -693,14 +718,20 @@ export function useProctoring({
       }
     };
 
+    // If candidate enters screen already in fullscreen, engage keyboard lock
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      lockKeyboard();
+    }
+
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
 
     return () => {
+      unlockKeyboard();
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
     };
-  }, [enabled, candidateId, testId, roomId, captureViolationProof, reportViolation]);
+  }, [enabled, candidateId, testId, roomId, captureViolationProof, reportViolation, lockKeyboard, unlockKeyboard]);
 
   // ── 5. Tab Switch / Window Blur Detection (FR-5.3) ───────────────────────────
   useEffect(() => {
@@ -771,12 +802,63 @@ export function useProctoring({
     };
   }, [enabled, allowInternalCopyPaste]);
 
+  // ── 7. Alt+Tab, Meta+Tab & Window Switching Shortcut Blocking ─────────────────
+  useEffect(() => {
+    if (!enabled) return;
+
+    const handleKeyDown = (e) => {
+      // 1. Alt + Tab (and Alt + Shift + Tab)
+      const isAltTab = (e.altKey || e.key === 'Alt') && (e.key === 'Tab' || e.code === 'Tab' || e.keyCode === 9);
+      // 2. Windows/Meta + Tab
+      const isMetaTab = (e.metaKey || e.key === 'Meta') && (e.key === 'Tab' || e.code === 'Tab' || e.keyCode === 9);
+      // 3. Ctrl + Tab (browser tab switch)
+      const isCtrlTab = e.ctrlKey && (e.key === 'Tab' || e.code === 'Tab' || e.keyCode === 9);
+      // 4. Alt + Escape
+      const isAltEsc = e.altKey && (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27);
+      // 5. Alt + ArrowLeft / ArrowRight (browser back/forward navigation)
+      const isAltNav = e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
+
+      if (isAltTab || isMetaTab || isCtrlTab || isAltEsc || isAltNav) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        toast.error('⚠️ Alt+Tab and window switching are disabled during the test!', {
+          id: 'alt-tab-prohibited',
+          duration: 3500,
+        });
+        return false;
+      }
+
+      // Prevent standalone Alt key from focusing browser menu bar
+      if ((e.key === 'Alt' || e.code === 'AltLeft' || e.code === 'AltRight' || e.keyCode === 18) && !e.getModifierState?.('AltGraph')) {
+        e.preventDefault();
+      }
+
+      // Block F11 (browser fullscreen toggle)
+      if (e.key === 'F11') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('keydown', handleKeyDown, true);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [enabled]);
+
   // Enter Fullscreen Helper
   const requestFullscreen = async () => {
     try {
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen();
         setIsFullscreen(true);
+        await lockKeyboard();
       }
     } catch (err) {
       console.error('Fullscreen request failed:', err);

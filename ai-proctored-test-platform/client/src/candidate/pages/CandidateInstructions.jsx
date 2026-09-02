@@ -184,6 +184,16 @@ export default function CandidateInstructions() {
         await document.documentElement.requestFullscreen();
       }
 
+      // Engage Keyboard Lock API immediately upon entering fullscreen (restricts Alt+Tab, Escape, Meta)
+      if ('keyboard' in navigator && typeof navigator.keyboard.lock === 'function') {
+        try {
+          await navigator.keyboard.lock();
+          console.log('[Instructions] Keyboard lock engaged (Alt+Tab restricted)');
+        } catch (kErr) {
+          console.warn('[Instructions] Keyboard lock failed:', kErr);
+        }
+      }
+
       // POST /tests/:testId/start-attempt (§9.5)
       const { data } = await api.startAttempt(joinData.test._id, { roomId: joinData.room._id });
 
@@ -276,6 +286,7 @@ export default function CandidateInstructions() {
               <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 0 }}>
                 {[
                   'Stay in fullscreen mode throughout the test. Exiting fullscreen will be logged as a violation.',
+                  'Alt+Tab and window switching are disabled. Leaving or defocusing the test window is logged with proof.',
                   'Do not switch tabs or minimize the browser window. Tab switches are logged with proof.',
                   'Do not use your mobile phone. Automated AI phone detection is active.',
                   'Copy-paste and context menus are disabled.',

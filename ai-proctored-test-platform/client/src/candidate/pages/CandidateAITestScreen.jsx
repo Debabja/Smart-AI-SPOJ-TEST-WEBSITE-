@@ -77,9 +77,104 @@ export default function CandidateAITestScreen() {
   const [newFileName, setNewFileName] = useState('');
   const [showAddFile, setShowAddFile] = useState(false);
 
-  // Preview & Tab mode: 'split' | 'code' | 'preview'
-  const [viewMode, setViewMode] = useState('split');
+  // ── Single-Row 4-Panel Resizable Workspace State ──────────────────────────
+  const [panelWidths, setPanelWidths] = useState(() => {
+    const saved = sessionStorage.getItem('ai_test_panel_widths');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length === 4) {
+          const sum = parsed.reduce((a, b) => a + b, 0);
+          if (Math.abs(sum - 100) < 1) {
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+    return [24, 30, 24, 22]; // Default percentages summing to 100
+  });
+
+  const [activeSplitter, setActiveSplitter] = useState(null); // null | 0 | 1 | 2
+  const [maximizedPanel, setMaximizedPanel] = useState(null); // null | 'question' | 'editor' | 'preview' | 'chat'
+  const containerRef = useRef(null);
+  const dragStartRef = useRef({ clientX: 0, widths: [24, 30, 24, 22], containerWidth: 1000 });
+
   const [previewKey, setPreviewKey] = useState(0);
+  const [previewDevice, setPreviewDevice] = useState('desktop');
+
+  useEffect(() => {
+    sessionStorage.setItem('ai_test_panel_widths', JSON.stringify(panelWidths));
+  }, [panelWidths]);
+
+  const handleSplitterMouseDown = useCallback((e, index) => {
+    e.preventDefault();
+    if (!containerRef.current || maximizedPanel !== null) return;
+
+    // Total width available for the 4 panels excluding the 3 splitters (each 10px = 30px) and padding (16px)
+    const containerWidth = Math.max(containerRef.current.clientWidth - 46, 500);
+    dragStartRef.current = {
+      clientX: e.clientX,
+      widths: [...panelWidths],
+      containerWidth,
+    };
+    setActiveSplitter(index);
+
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+  }, [panelWidths, maximizedPanel]);
+
+  useEffect(() => {
+    if (activeSplitter === null) return;
+
+    const handleMouseMove = (e) => {
+      const { clientX: startX, widths, containerWidth } = dragStartRef.current;
+      const deltaPx = e.clientX - startX;
+      const deltaPercent = (deltaPx / containerWidth) * 100;
+
+      const idx = activeSplitter; // 0, 1, or 2
+
+      // Sensible min widths: ~160px for question, ~200px for editor, ~180px for preview, ~180px for chat
+      const minPixels = [160, 200, 180, 180];
+      const minPercentA = (minPixels[idx] / containerWidth) * 100;
+      const minPercentB = (minPixels[idx + 1] / containerWidth) * 100;
+
+      let newWidthA = widths[idx] + deltaPercent;
+      let newWidthB = widths[idx + 1] - deltaPercent;
+
+      const combined = widths[idx] + widths[idx + 1];
+
+      if (newWidthA < minPercentA) {
+        newWidthA = minPercentA;
+        newWidthB = combined - minPercentA;
+      } else if (newWidthB < minPercentB) {
+        newWidthB = minPercentB;
+        newWidthA = combined - minPercentB;
+      }
+
+      setPanelWidths((prev) => {
+        const next = [...prev];
+        next[idx] = newWidthA;
+        next[idx + 1] = newWidthB;
+        return next;
+      });
+    };
+
+    const handleMouseUp = () => {
+      setActiveSplitter(null);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+
+    window.addEventListener('mousemove', handleMouseMove, { passive: true });
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [activeSplitter]);
 
   // AI Chat state
   const [chatMessages, setChatMessages] = useState([]);
@@ -472,65 +567,340 @@ export default function CandidateAITestScreen() {
         </div>
       )}
 
-      {/* ── Main Workspace: 3-column Layout ──────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '320px 1fr 380px', overflow: 'hidden' }}>
+      {/* ── Main Workspace: 4-Panel Single Row Resizable Layout ─────────────── */}
+      <div
+        ref={containerRef}
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'stretch',
+          overflow: 'hidden',
+          background: '#070b14',
+          padding: '6px 8px',
+          boxSizing: 'border-box',
+          position: 'relative',
+          userSelect: activeSplitter !== null ? 'none' : 'auto',
+          gap: 0,
+        }}
+      >
+        {/* Transparent Drag Shield across full window to ensure 60fps tracking over iframes and Monaco */}
+        {activeSplitter !== null && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 999999,
+              cursor: 'col-resize',
+              userSelect: 'none',
+              pointerEvents: 'all',
+              background: 'transparent',
+            }}
+          />
+        )}
 
-        {/* ── Left Column: Question Brief & Instructions ─────────────────────── */}
-        <div style={{ background: '#1e293b', borderRight: '1px solid #334155', display: 'flex', flexDirection: 'column', overflowY: 'auto', color: '#e2e8f0', padding: 20 }}>
-          <div style={{ marginBottom: 16 }}>
-            <span className="badge badge-teal" style={{ marginBottom: 6 }}>AI Development Task</span>
-            <h2 style={{ color: 'white', fontSize: '1.2rem', fontWeight: 700, margin: '6px 0 10px 0' }}>
-              Q{activeQuestionIdx + 1}. {activeQuestion?.title}
-            </h2>
-          </div>
-
-          <div style={{ fontSize: '0.875rem', lineHeight: 1.6, color: '#cbd5e1', whiteSpace: 'pre-wrap', marginBottom: 20 }}>
-            {activeQuestion?.description}
-          </div>
-
-          <div style={{ background: '#0f172a', padding: 14, borderRadius: 8, border: '1px solid #334155', marginBottom: 16 }}>
-            <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#38bdf8', marginBottom: 6 }}>
-              💡 AI Test Instructions
+        {/* ── PANEL 1: Question ── */}
+        <div
+          style={{
+            flex: maximizedPanel === 'question' ? '1 1 100%' : `0 0 calc(${panelWidths[0]}% - 7.5px)`,
+            minWidth: maximizedPanel === 'question' ? 'auto' : 160,
+            display: !maximizedPanel || maximizedPanel === 'question' ? 'flex' : 'none',
+            flexDirection: 'column',
+            background: '#131b2e',
+            border: '1.5px solid #7c3aed',
+            borderRadius: 8,
+            overflow: 'hidden',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+            position: 'relative',
+          }}
+        >
+          {/* Header */}
+          <div
+            style={{
+              height: 38,
+              background: '#0f172a',
+              borderBottom: '1px solid #1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 10px',
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                style={{
+                  background: '#7c3aed',
+                  color: '#ffffff',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  padding: '2px 7px',
+                  borderRadius: 4,
+                  lineHeight: 1.2,
+                }}
+              >
+                1
+              </span>
+              <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: '0.82rem' }}>
+                Question
+              </span>
             </div>
-            <ul style={{ paddingLeft: 16, fontSize: '0.75rem', color: '#94a3b8', display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <li>Ask the AI assistant on the right for code, architecture, or bug fixes.</li>
-              <li>AI code does not auto-insert: copy from chat and paste into your files.</li>
-              <li>You can create HTML, CSS, and JS files to structure your project.</li>
-              <li>Click the <strong>Preview</strong> tab to test your live app rendering.</li>
-            </ul>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                type="button"
+                title={maximizedPanel === 'question' ? 'Restore Panel' : 'Maximize Panel'}
+                onClick={() => setMaximizedPanel((p) => (p === 'question' ? null : 'question'))}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94a3b8',
+                  fontSize: '0.9rem',
+                  cursor: 'pointer',
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                }}
+              >
+                {maximizedPanel === 'question' ? '🗗' : '⛶'}
+              </button>
+            </div>
+          </div>
+
+          {/* Question Body (Scrollable) */}
+          <div
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: '14px 16px',
+              color: '#e2e8f0',
+              fontSize: '0.85rem',
+              lineHeight: 1.6,
+            }}
+          >
+            <div style={{ marginBottom: 12 }}>
+              <span
+                style={{
+                  background: '#0284c7',
+                  color: '#ffffff',
+                  fontSize: '0.68rem',
+                  fontWeight: 800,
+                  padding: '2px 8px',
+                  borderRadius: 12,
+                  letterSpacing: '0.04em',
+                }}
+              >
+                AI DEVELOPMENT TASK
+              </span>
+              <h2
+                style={{
+                  color: '#ffffff',
+                  fontSize: '1.05rem',
+                  fontWeight: 700,
+                  margin: '8px 0 8px 0',
+                }}
+              >
+                Q{activeQuestionIdx + 1}. {activeQuestion?.title || 'Build an AI Task Manager'}
+              </h2>
+            </div>
+
+            <div style={{ color: '#cbd5e1', whiteSpace: 'pre-wrap', marginBottom: 16 }}>
+              {activeQuestion?.description}
+            </div>
+
+            <div
+              style={{
+                background: '#0a0f1d',
+                padding: '10px 12px',
+                borderRadius: 6,
+                border: '1px solid #1e293b',
+                marginTop: 12,
+              }}
+            >
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#a78bfa', marginBottom: 4 }}>
+                💡 Hint
+              </div>
+              <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                Focus on clean UI/UX and efficient state management.
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div
+            style={{
+              height: 24,
+              background: '#0f172a',
+              borderTop: '1px solid #1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 12px',
+              fontSize: '0.7rem',
+              color: '#64748b',
+              flexShrink: 0,
+            }}
+          >
+            <span>
+              Lines: {activeQuestion?.description ? activeQuestion.description.split('\n').length : 38}{' '}
+              &nbsp;|&nbsp; Words: {activeQuestion?.description ? activeQuestion.description.split(/\s+/).filter(Boolean).length : 201}
+            </span>
+            <span style={{ color: '#94a3b8' }}>Read Only</span>
           </div>
         </div>
 
-        {/* ── Center Column: Multi-file Editor & Live Preview ─────────────────── */}
-        <div style={{ display: 'flex', flexDirection: 'column', background: '#0f172a', overflow: 'hidden' }}>
+        {/* ── SPLITTER 0: Question <-> Code Editor ── */}
+        {!maximizedPanel && (
+          <div
+            onMouseDown={(e) => handleSplitterMouseDown(e, 0)}
+            title="Drag horizontally to resize Question and Code Editor"
+            style={{
+              width: 10,
+              flexShrink: 0,
+              cursor: 'col-resize',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10,
+            }}
+          >
+            <div
+              style={{
+                width: 2,
+                height: '100%',
+                background: activeSplitter === 0 ? '#38bdf8' : '#334155',
+                transition: 'background 0.15s ease',
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                background: activeSplitter === 0 ? '#38bdf8' : '#1e293b',
+                border: '1px solid ' + (activeSplitter === 0 ? '#ffffff' : '#475569'),
+                color: activeSplitter === 0 ? '#0f172a' : '#94a3b8',
+                borderRadius: 10,
+                width: 14,
+                height: 28,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '0.65rem',
+                fontWeight: 900,
+                boxShadow: '0 2px 5px rgba(0,0,0,0.4)',
+                userSelect: 'none',
+              }}
+            >
+              ↔
+            </div>
+          </div>
+        )}
 
-          {/* Tab Toolbar: File tabs + View mode toggle */}
-          <div style={{ background: '#1e293b', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px', height: 44 }}>
-            {/* File tabs */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflowX: 'auto' }}>
+        {/* ── PANEL 2: Code Editor ── */}
+        <div
+          style={{
+            flex: maximizedPanel === 'editor' ? '1 1 100%' : `0 0 calc(${panelWidths[1]}% - 7.5px)`,
+            minWidth: maximizedPanel === 'editor' ? 'auto' : 200,
+            display: !maximizedPanel || maximizedPanel === 'editor' ? 'flex' : 'none',
+            flexDirection: 'column',
+            background: '#0f172a',
+            border: '1.5px solid #0284c7',
+            borderRadius: 8,
+            overflow: 'hidden',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+            position: 'relative',
+          }}
+        >
+          {/* Header */}
+          <div
+            style={{
+              height: 38,
+              background: '#0b1120',
+              borderBottom: '1px solid #1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 10px',
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                style={{
+                  background: '#0284c7',
+                  color: '#ffffff',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  padding: '2px 7px',
+                  borderRadius: 4,
+                  lineHeight: 1.2,
+                }}
+              >
+                2
+              </span>
+              <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: '0.82rem' }}>
+                Code Editor
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                type="button"
+                title={maximizedPanel === 'editor' ? 'Restore Panel' : 'Maximize Panel'}
+                onClick={() => setMaximizedPanel((p) => (p === 'editor' ? null : 'editor'))}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94a3b8',
+                  fontSize: '0.9rem',
+                  cursor: 'pointer',
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                }}
+              >
+                {maximizedPanel === 'editor' ? '🗗' : '⛶'}
+              </button>
+            </div>
+          </div>
+
+          {/* Sub-header: File Tabs Bar */}
+          <div
+            style={{
+              background: '#131b2e',
+              borderBottom: '1px solid #1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 8px',
+              height: 34,
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 3, overflowX: 'auto', flex: 1 }}>
               {Object.keys(files).map((fileName) => (
                 <div
                   key={fileName}
                   onClick={() => setActiveFile(fileName)}
                   style={{
-                    padding: '6px 12px',
-                    fontSize: '0.8rem',
+                    padding: '4px 10px',
+                    fontSize: '0.75rem',
                     fontFamily: 'monospace',
                     cursor: 'pointer',
                     borderRadius: '4px 4px 0 0',
                     background: activeFile === fileName ? '#0f172a' : 'transparent',
                     color: activeFile === fileName ? '#38bdf8' : '#94a3b8',
-                    borderBottom: activeFile === fileName ? '2px solid #38bdf8' : 'none',
+                    borderBottom: activeFile === fileName ? '2px solid #38bdf8' : '2px solid transparent',
                     display: 'flex',
                     alignItems: 'center',
                     gap: 6,
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   <span>{fileName}</span>
                   {Object.keys(files).length > 1 && (
                     <span
-                      onClick={(e) => { e.stopPropagation(); handleDeleteFile(fileName); }}
-                      style={{ opacity: 0.6, fontSize: '0.7rem', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteFile(fileName);
+                      }}
+                      style={{ opacity: 0.6, fontSize: '0.65rem', cursor: 'pointer' }}
                     >
                       ✕
                     </span>
@@ -539,126 +909,540 @@ export default function CandidateAITestScreen() {
               ))}
 
               {showAddFile ? (
-                <form onSubmit={handleAddFile} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <form onSubmit={handleAddFile} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                   <input
                     type="text"
                     placeholder="filename.ext"
                     value={newFileName}
                     onChange={(e) => setNewFileName(e.target.value)}
                     autoFocus
-                    style={{ background: '#0f172a', border: '1px solid #38bdf8', color: 'white', padding: '2px 6px', fontSize: '0.75rem', borderRadius: 4, width: 100 }}
+                    style={{
+                      background: '#0f172a',
+                      border: '1px solid #38bdf8',
+                      color: 'white',
+                      padding: '2px 6px',
+                      fontSize: '0.72rem',
+                      borderRadius: 4,
+                      width: 90,
+                    }}
                   />
-                  <button type="submit" style={{ background: '#0E7C86', color: 'white', border: 'none', borderRadius: 4, padding: '2px 6px', fontSize: '0.7rem', cursor: 'pointer' }}>Add</button>
-                  <button type="button" onClick={() => setShowAddFile(false)} style={{ background: 'none', color: '#94a3b8', border: 'none', fontSize: '0.7rem', cursor: 'pointer' }}>✕</button>
+                  <button
+                    type="submit"
+                    style={{
+                      background: '#0E7C86',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: 4,
+                      padding: '2px 6px',
+                      fontSize: '0.68rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddFile(false)}
+                    style={{
+                      background: 'none',
+                      color: '#94a3b8',
+                      border: 'none',
+                      fontSize: '0.68rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✕
+                  </button>
                 </form>
               ) : (
                 <button
                   onClick={() => setShowAddFile(true)}
-                  style={{ background: 'none', border: '1px dashed #475569', color: '#94a3b8', borderRadius: 4, padding: '2px 8px', fontSize: '0.75rem', cursor: 'pointer' }}
+                  style={{
+                    background: 'none',
+                    border: '1px dashed #475569',
+                    color: '#94a3b8',
+                    borderRadius: 4,
+                    padding: '2px 7px',
+                    fontSize: '0.72rem',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
                 >
-                  + New File
+                  +
                 </button>
               )}
             </div>
-
-            {/* View Mode toggle (Split, Code Only, Preview Only) */}
-            <div style={{ display: 'flex', gap: 4, background: '#0f172a', padding: 2, borderRadius: 6 }}>
-              {[
-                { id: 'split', label: '◫ Split' },
-                { id: 'code', label: '⌨ Code' },
-                { id: 'preview', label: '▶ Preview' },
-              ].map(m => (
-                <button
-                  key={m.id}
-                  onClick={() => { setViewMode(m.id); setPreviewKey(k => k + 1); }}
-                  style={{
-                    background: viewMode === m.id ? '#0E7C86' : 'transparent',
-                    color: viewMode === m.id ? 'white' : '#94a3b8',
-                    border: 'none',
-                    borderRadius: 4,
-                    padding: '4px 10px',
-                    fontSize: '0.75rem',
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                  }}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
           </div>
 
-          {/* Workspace Area: Monaco Editor + Live Preview */}
-          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: viewMode === 'split' ? '1fr 1fr' : '1fr', overflow: 'hidden' }}>
+          {/* Monaco Editor Container */}
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <Editor
+              height="100%"
+              language={getMonacoLanguage(activeFile)}
+              value={files[activeFile] || ''}
+              onChange={handleFileChange}
+              theme="vs-dark"
+              options={{
+                fontSize: 13,
+                fontFamily: '"Fira Code", monospace',
+                minimap: { enabled: false },
+                lineNumbers: 'on',
+                wordWrap: 'on',
+                scrollBeyondLastLine: false,
+                tabSize: 2,
+                automaticLayout: true,
+                readOnly: Boolean(disqualified || proctoring?.isCameraDisconnected),
+              }}
+            />
+          </div>
 
-            {/* Monaco Editor Panel */}
-            {(viewMode === 'split' || viewMode === 'code') && (
-              <div style={{ height: '100%', borderRight: viewMode === 'split' ? '1px solid #334155' : 'none', overflow: 'hidden' }}>
-                <Editor
-                  height="100%"
-                  language={getMonacoLanguage(activeFile)}
-                  value={files[activeFile] || ''}
-                  onChange={handleFileChange}
-                  theme="vs-dark"
-                  options={{
-                    fontSize: 13,
-                    fontFamily: '"Fira Code", monospace',
-                    minimap: { enabled: false },
-                    lineNumbers: 'on',
-                    wordWrap: 'on',
-                    scrollBeyondLastLine: false,
-                    tabSize: 2,
-                    readOnly: Boolean(disqualified || proctoring?.isCameraDisconnected),
-                  }}
-                />
-              </div>
-            )}
-
-            {/* Live Preview Panel (FR-6.3: Client-side rendering) */}
-            {(viewMode === 'split' || viewMode === 'preview') && (
-              <div style={{ height: '100%', background: 'white', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ background: '#f1f5f9', borderBottom: '1px solid #e2e8f0', padding: '4px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600 }}>🌐 Live Output Sandbox</span>
-                  <button
-                    onClick={() => setPreviewKey(k => k + 1)}
-                    style={{ background: 'none', border: 'none', color: '#0E7C86', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 600 }}
-                  >
-                    ↻ Refresh
-                  </button>
-                </div>
-                <iframe
-                  key={previewKey}
-                  title="Live Preview"
-                  srcDoc={generatePreviewSrcDoc()}
-                  sandbox="allow-scripts allow-modals allow-same-origin"
-                  style={{ width: '100%', height: '100%', border: 'none', background: 'white' }}
-                />
-              </div>
-            )}
+          {/* Footer */}
+          <div
+            style={{
+              height: 24,
+              background: '#0b1120',
+              borderTop: '1px solid #1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 12px',
+              fontSize: '0.7rem',
+              color: '#64748b',
+              flexShrink: 0,
+            }}
+          >
+            <span>Ln 1, Col 1 &nbsp;|&nbsp; Spaces: 2 &nbsp;|&nbsp; UTF-8</span>
+            <span style={{ color: '#38bdf8' }}>{getMonacoLanguage(activeFile)} &nbsp;✓ Prettier</span>
           </div>
         </div>
 
-        {/* ── Right Column: Kimi AI Chat Panel (FR-6.1, FR-6.2) ────────────────── */}
-        <div style={{ background: '#1e293b', borderLeft: '1px solid #334155', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {/* Chat Header */}
-          <div style={{ padding: '12px 16px', background: '#0f172a', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ background: '#0E7C86', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem' }}>
-              🤖
+        {/* ── SPLITTER 1: Code Editor <-> Preview ── */}
+        {!maximizedPanel && (
+          <div
+            onMouseDown={(e) => handleSplitterMouseDown(e, 1)}
+            title="Drag horizontally to resize Code Editor and Preview"
+            style={{
+              width: 10,
+              flexShrink: 0,
+              cursor: 'col-resize',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10,
+            }}
+          >
+            <div
+              style={{
+                width: 2,
+                height: '100%',
+                background: activeSplitter === 1 ? '#38bdf8' : '#334155',
+                transition: 'background 0.15s ease',
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                background: activeSplitter === 1 ? '#38bdf8' : '#1e293b',
+                border: '1px solid ' + (activeSplitter === 1 ? '#ffffff' : '#475569'),
+                color: activeSplitter === 1 ? '#0f172a' : '#94a3b8',
+                borderRadius: 10,
+                width: 14,
+                height: 28,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '0.65rem',
+                fontWeight: 900,
+                boxShadow: '0 2px 5px rgba(0,0,0,0.4)',
+                userSelect: 'none',
+              }}
+            >
+              ↔
             </div>
-            <div>
-              <div style={{ color: 'white', fontWeight: 700, fontSize: '0.85rem' }}>Kimi AI Assistant</div>
-              <div style={{ color: '#2ECC71', fontSize: '0.7rem' }}>● Connected</div>
+          </div>
+        )}
+
+        {/* ── PANEL 3: Preview ── */}
+        <div
+          style={{
+            flex: maximizedPanel === 'preview' ? '1 1 100%' : `0 0 calc(${panelWidths[2]}% - 7.5px)`,
+            minWidth: maximizedPanel === 'preview' ? 'auto' : 180,
+            display: !maximizedPanel || maximizedPanel === 'preview' ? 'flex' : 'none',
+            flexDirection: 'column',
+            background: '#ffffff',
+            border: '1.5px solid #10b981',
+            borderRadius: 8,
+            overflow: 'hidden',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+            position: 'relative',
+          }}
+        >
+          {/* Header */}
+          <div
+            style={{
+              height: 38,
+              background: '#0f172a',
+              borderBottom: '1px solid #1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 10px',
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                style={{
+                  background: '#10b981',
+                  color: '#ffffff',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  padding: '2px 7px',
+                  borderRadius: 4,
+                  lineHeight: 1.2,
+                }}
+              >
+                3
+              </span>
+              <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: '0.82rem' }}>
+                Preview
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                type="button"
+                title={maximizedPanel === 'preview' ? 'Restore Panel' : 'Maximize Panel'}
+                onClick={() => setMaximizedPanel((p) => (p === 'preview' ? null : 'preview'))}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94a3b8',
+                  fontSize: '0.9rem',
+                  cursor: 'pointer',
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                }}
+              >
+                {maximizedPanel === 'preview' ? '🗗' : '⛶'}
+              </button>
             </div>
           </div>
 
-          {/* Chat Messages */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Browser Address Bar Sub-header */}
+          <div
+            style={{
+              height: 32,
+              background: '#1e293b',
+              borderBottom: '1px solid #334155',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 8px',
+              flexShrink: 0,
+            }}
+          >
+            <div
+              style={{
+                flex: 1,
+                background: '#0f172a',
+                borderRadius: 4,
+                padding: '2px 10px',
+                fontSize: '0.72rem',
+                color: '#94a3b8',
+                fontFamily: 'monospace',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginRight: 8,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <span>http://localhost:3000</span>
+              <span style={{ color: '#10b981', fontSize: '0.65rem', flexShrink: 0 }}>● LIVE</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+              <button
+                onClick={() => setPreviewKey((k) => k + 1)}
+                title="Reload Preview"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#38bdf8',
+                  fontSize: '0.85rem',
+                  cursor: 'pointer',
+                  padding: '2px 4px',
+                }}
+              >
+                ↻
+              </button>
+              <button
+                onClick={() => {
+                  const blob = new Blob([generatePreviewSrcDoc()], { type: 'text/html' });
+                  const url = URL.createObjectURL(blob);
+                  window.open(url, '_blank');
+                }}
+                title="Open in new window"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94a3b8',
+                  fontSize: '0.85rem',
+                  cursor: 'pointer',
+                  padding: '2px 4px',
+                }}
+              >
+                ↗
+              </button>
+            </div>
+          </div>
+
+          {/* Iframe Viewport Container */}
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              background: '#f8fafc',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+            }}
+          >
+            <iframe
+              key={previewKey}
+              title="Live Preview"
+              srcDoc={generatePreviewSrcDoc()}
+              sandbox="allow-scripts allow-modals allow-same-origin"
+              style={{
+                width: previewDevice === 'mobile' ? '375px' : previewDevice === 'tablet' ? '768px' : '100%',
+                height: '100%',
+                border: previewDevice !== 'desktop' ? '1px solid #cbd5e1' : 'none',
+                background: 'white',
+                boxShadow: previewDevice !== 'desktop' ? '0 0 16px rgba(0,0,0,0.1)' : 'none',
+                transition: 'width 0.2s ease',
+              }}
+            />
+          </div>
+
+          {/* Footer */}
+          <div
+            style={{
+              height: 24,
+              background: '#0f172a',
+              borderTop: '1px solid #1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 12px',
+              fontSize: '0.7rem',
+              color: '#94a3b8',
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ color: '#cbd5e1' }}>Responsive 100%</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                onClick={() => setPreviewDevice('desktop')}
+                title="Desktop View"
+                style={{ cursor: 'pointer', opacity: previewDevice === 'desktop' ? 1 : 0.5 }}
+              >
+                🖥️
+              </span>
+              <span
+                onClick={() => setPreviewDevice('tablet')}
+                title="Tablet View"
+                style={{ cursor: 'pointer', opacity: previewDevice === 'tablet' ? 1 : 0.5 }}
+              >
+                💻
+              </span>
+              <span
+                onClick={() => setPreviewDevice('mobile')}
+                title="Mobile View"
+                style={{ cursor: 'pointer', opacity: previewDevice === 'mobile' ? 1 : 0.5 }}
+              >
+                📱
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* ── SPLITTER 2: Preview <-> AI Assistant ── */}
+        {!maximizedPanel && (
+          <div
+            onMouseDown={(e) => handleSplitterMouseDown(e, 2)}
+            title="Drag horizontally to resize Preview and AI Assistant"
+            style={{
+              width: 10,
+              flexShrink: 0,
+              cursor: 'col-resize',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10,
+            }}
+          >
+            <div
+              style={{
+                width: 2,
+                height: '100%',
+                background: activeSplitter === 2 ? '#38bdf8' : '#334155',
+                transition: 'background 0.15s ease',
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                background: activeSplitter === 2 ? '#38bdf8' : '#1e293b',
+                border: '1px solid ' + (activeSplitter === 2 ? '#ffffff' : '#475569'),
+                color: activeSplitter === 2 ? '#0f172a' : '#94a3b8',
+                borderRadius: 10,
+                width: 14,
+                height: 28,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '0.65rem',
+                fontWeight: 900,
+                boxShadow: '0 2px 5px rgba(0,0,0,0.4)',
+                userSelect: 'none',
+              }}
+            >
+              ↔
+            </div>
+          </div>
+        )}
+
+        {/* ── PANEL 4: AI Assistant ── */}
+        <div
+          style={{
+            flex: maximizedPanel === 'chat' ? '1 1 100%' : `0 0 calc(${panelWidths[3]}% - 7.5px)`,
+            minWidth: maximizedPanel === 'chat' ? 'auto' : 180,
+            display: !maximizedPanel || maximizedPanel === 'chat' ? 'flex' : 'none',
+            flexDirection: 'column',
+            background: '#131b2e',
+            border: '1.5px solid #ea580c',
+            borderRadius: 8,
+            overflow: 'hidden',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+            position: 'relative',
+          }}
+        >
+          {/* Header */}
+          <div
+            style={{
+              height: 38,
+              background: '#0f172a',
+              borderBottom: '1px solid #1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 10px',
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                style={{
+                  background: '#ea580c',
+                  color: '#ffffff',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  padding: '2px 7px',
+                  borderRadius: 4,
+                  lineHeight: 1.2,
+                }}
+              >
+                4
+              </span>
+              <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: '0.82rem' }}>
+                AI Assistant
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                type="button"
+                title={maximizedPanel === 'chat' ? 'Restore Panel' : 'Maximize Panel'}
+                onClick={() => setMaximizedPanel((p) => (p === 'chat' ? null : 'chat'))}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94a3b8',
+                  fontSize: '0.9rem',
+                  cursor: 'pointer',
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                }}
+              >
+                {maximizedPanel === 'chat' ? '🗗' : '⛶'}
+              </button>
+            </div>
+          </div>
+
+          {/* Sub-header: Kimi status */}
+          <div
+            style={{
+              height: 32,
+              background: '#0b1120',
+              borderBottom: '1px solid #1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '0 12px',
+              flexShrink: 0,
+            }}
+          >
+            <div
+              style={{
+                width: 20,
+                height: 20,
+                borderRadius: '50%',
+                background: '#0E7C86',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '0.75rem',
+              }}
+            >
+              🤖
+            </div>
+            <span style={{ color: '#ffffff', fontWeight: 700, fontSize: '0.78rem' }}>
+              Kimi AI Assistant
+            </span>
+            <span style={{ color: '#22c55e', fontSize: '0.68rem' }}>● Connected</span>
+          </div>
+
+          {/* Chat Messages Stream (Scrollable) */}
+          <div
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: '12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+              minHeight: 0,
+            }}
+          >
             {chatMessages.length === 0 && (
-              <div style={{ textAlign: 'center', color: '#64748b', marginTop: 40, fontSize: '0.8rem' }}>
-                <div style={{ fontSize: '2rem', marginBottom: 8 }}>💬</div>
-                <div>Start brainstorming with Kimi.</div>
-                <div style={{ fontSize: '0.75rem', marginTop: 4 }}>
-                  Ask for code snippets, designs, logic, or bug fixes.
+              <div
+                style={{
+                  textAlign: 'center',
+                  color: '#64748b',
+                  marginTop: 20,
+                  fontSize: '0.8rem',
+                  padding: '0 16px',
+                }}
+              >
+                <div style={{ fontSize: '1.8rem', marginBottom: 6 }}>💬</div>
+                <div style={{ color: '#cbd5e1', fontWeight: 600 }}>Welcome to Kimi AI Assistant!</div>
+                <div style={{ fontSize: '0.74rem', marginTop: 4, lineHeight: 1.5 }}>
+                  Ask for code suggestions, debugging, design advice, or best practices.
                 </div>
               </div>
             )}
@@ -668,18 +1452,25 @@ export default function CandidateAITestScreen() {
                 key={idx}
                 style={{
                   alignSelf: msg.role === 'candidate' ? 'flex-end' : 'flex-start',
-                  maxWidth: '88%',
-                  background: msg.role === 'candidate' ? '#0E7C86' : '#334155',
+                  maxWidth: '90%',
+                  background: msg.role === 'candidate' ? '#4338ca' : '#1e293b',
                   color: 'white',
                   borderRadius: 8,
-                  padding: '10px 12px',
-                  fontSize: '0.85rem',
-                  lineHeight: 1.5,
+                  padding: '8px 10px',
+                  fontSize: '0.82rem',
+                  lineHeight: 1.45,
                   whiteSpace: 'pre-wrap',
-                  position: 'relative',
+                  border: msg.role === 'candidate' ? 'none' : '1px solid #334155',
                 }}
               >
-                <div style={{ fontWeight: 600, fontSize: '0.7rem', color: msg.role === 'candidate' ? '#a5f3fc' : '#38bdf8', marginBottom: 4 }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: '0.68rem',
+                    color: msg.role === 'candidate' ? '#c7d2fe' : '#38bdf8',
+                    marginBottom: 3,
+                  }}
+                >
                   {msg.role === 'candidate' ? 'You' : 'Kimi AI'}
                 </div>
                 <div>{msg.message}</div>
@@ -687,13 +1478,13 @@ export default function CandidateAITestScreen() {
                   <button
                     onClick={() => handleCopyFromChat(msg.message)}
                     style={{
-                      marginTop: 8,
-                      background: 'rgba(0,0,0,0.25)',
+                      marginTop: 6,
+                      background: 'rgba(0,0,0,0.3)',
                       border: '1px solid rgba(255,255,255,0.2)',
                       color: '#cbd5e1',
                       borderRadius: 4,
-                      padding: '3px 8px',
-                      fontSize: '0.7rem',
+                      padding: '2px 7px',
+                      fontSize: '0.68rem',
                       cursor: 'pointer',
                       display: 'inline-flex',
                       alignItems: 'center',
@@ -707,15 +1498,38 @@ export default function CandidateAITestScreen() {
             ))}
 
             {isAiTyping && (
-              <div style={{ alignSelf: 'flex-start', background: '#334155', borderRadius: 8, padding: '8px 12px', color: '#94a3b8', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span className="spinner spinner-dark" style={{ width: 12, height: 12 }} /> Kimi is writing...
+              <div
+                style={{
+                  alignSelf: 'flex-start',
+                  background: '#1e293b',
+                  borderRadius: 8,
+                  padding: '6px 10px',
+                  color: '#94a3b8',
+                  fontSize: '0.78rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <span className="spinner spinner-dark" style={{ width: 12, height: 12 }} />
+                Kimi is writing...
               </div>
             )}
             <div ref={chatEndRef} />
           </div>
 
           {/* Chat Input Form */}
-          <form onSubmit={handleSendChat} style={{ padding: 12, background: '#0f172a', borderTop: '1px solid #334155', display: 'flex', gap: 8 }}>
+          <form
+            onSubmit={handleSendChat}
+            style={{
+              padding: '8px 10px',
+              background: '#0f172a',
+              borderTop: '1px solid #1e293b',
+              display: 'flex',
+              gap: 6,
+              flexShrink: 0,
+            }}
+          >
             <input
               id="kimi-chat-input"
               type="text"
@@ -726,11 +1540,11 @@ export default function CandidateAITestScreen() {
               style={{
                 flex: 1,
                 background: '#1e293b',
-                border: '1px solid #475569',
+                border: '1px solid #334155',
                 color: 'white',
-                padding: '8px 12px',
-                borderRadius: 6,
-                fontSize: '0.85rem',
+                padding: '6px 10px',
+                borderRadius: 5,
+                fontSize: '0.8rem',
                 outline: 'none',
               }}
             />
@@ -739,11 +1553,114 @@ export default function CandidateAITestScreen() {
               type="submit"
               className="btn btn-primary btn-sm"
               disabled={isAiTyping || !chatInput.trim() || disqualified || proctoring?.isCameraDisconnected}
-              style={{ padding: '8px 14px' }}
+              style={{ padding: '6px 12px', fontSize: '0.78rem' }}
             >
               Send
             </button>
           </form>
+        </div>
+      </div>
+
+      {/* ── Bottom Proctoring Status Bar ── */}
+      <div
+        style={{
+          height: 46,
+          background: '#0b1120',
+          borderTop: '1px solid #1e293b',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 16px',
+          fontSize: '0.8rem',
+          color: '#94a3b8',
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {/* Webcam mini feed */}
+          <div
+            style={{
+              position: 'relative',
+              width: 58,
+              height: 36,
+              background: '#000',
+              borderRadius: 4,
+              overflow: 'hidden',
+              border: '1px solid #334155',
+            }}
+          >
+            <video
+              ref={proctoring.videoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                top: 2,
+                left: 2,
+                background: 'rgba(0,0,0,0.7)',
+                color: '#ef4444',
+                fontSize: '0.55rem',
+                padding: '1px 3px',
+                borderRadius: 2,
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 2,
+              }}
+            >
+              ● REC
+            </div>
+            <div
+              style={{
+                position: 'absolute',
+                bottom: 2,
+                left: 2,
+                background: 'rgba(0,0,0,0.7)',
+                color: proctoring.faceCount === 1 ? '#22c55e' : '#ef4444',
+                fontSize: '0.5rem',
+                padding: '1px 3px',
+                borderRadius: 2,
+                fontWeight: 600,
+              }}
+            >
+              {proctoring.faceCount === 1 ? '✓ Face' : '✗ No Face'}
+            </div>
+          </div>
+          <span style={{ color: '#cbd5e1', fontWeight: 600, fontSize: '0.8rem' }}>Proctored</span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#f59e0b', fontSize: '0.78rem' }}>
+          <span>⚠️</span>
+          <span>Do not switch tabs or open other applications. Violations are monitored.</span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#22c55e', fontSize: '0.78rem' }}>
+            <span>●</span>
+            <span style={{ color: '#cbd5e1' }}>All systems normal</span>
+            <span style={{ color: '#64748b' }}>📶</span>
+          </div>
+          <button
+            onClick={() => toast('Proctoring support notified. An admin is monitoring your session.', { icon: 'ℹ️' })}
+            style={{
+              background: 'transparent',
+              border: '1px solid #334155',
+              color: '#cbd5e1',
+              padding: '4px 10px',
+              borderRadius: 4,
+              fontSize: '0.75rem',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            🚨 Report Issue
+          </button>
         </div>
       </div>
 
