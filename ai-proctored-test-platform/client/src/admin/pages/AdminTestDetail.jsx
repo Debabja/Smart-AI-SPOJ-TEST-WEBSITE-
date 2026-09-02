@@ -509,13 +509,15 @@ export default function AdminTestDetail() {
                   Generate secure room codes &amp; passwords for physical test centers.
                 </p>
               </div>
-              <button
-                onClick={() => setShowAddRoomModal(true)}
-                className="btn btn-primary"
-                style={{ padding: '8px 14px', fontSize: '0.8rem' }}
-              >
-                + Add Room
-              </button>
+              {test?.status !== 'ENDED' && (
+                <button
+                  onClick={() => setShowAddRoomModal(true)}
+                  className="btn btn-primary"
+                  style={{ padding: '8px 14px', fontSize: '0.8rem' }}
+                >
+                  + Add Room
+                </button>
+              )}
             </div>
 
             {rooms.length === 0 ? (
@@ -525,20 +527,23 @@ export default function AdminTestDetail() {
                 <p style={{ fontSize: '0.85rem', marginBottom: 16 }}>
                   Add physical test rooms to generate unique Room Codes and Passwords for candidates.
                 </p>
-                <button
-                  onClick={() => setShowAddRoomModal(true)}
-                  className="btn btn-primary"
-                  style={{ fontSize: '0.85rem' }}
-                >
-                  + Add First Room
-                </button>
+                {test?.status !== 'ENDED' && (
+                  <button
+                    onClick={() => setShowAddRoomModal(true)}
+                    className="btn btn-primary"
+                    style={{ fontSize: '0.85rem' }}
+                  >
+                    + Add First Room
+                  </button>
+                )}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 {rooms.map((room) => {
                   const isLive = test?.status === 'LIVE';
                   const isEnded = test?.status === 'ENDED';
-                  const isClosed = room.status === 'CLOSED';
+                  // BUG-22: Rooms in an ENDED test are closed by definition
+                  const isClosed = room.status === 'CLOSED' || isEnded;
                   const isExpired = isLive && room.passwordValidUntil && new Date(room.passwordValidUntil) < new Date();
 
                   return (
@@ -566,7 +571,7 @@ export default function AdminTestDetail() {
                             className={`badge ${isClosed ? 'badge-danger' : 'badge-success'}`}
                             style={{ fontSize: '0.7rem' }}
                           >
-                            {room.status}
+                            {isClosed ? 'CLOSED' : room.status}
                           </span>
                           {isLive && isExpired && !isClosed && (
                             <span className="badge badge-warning" style={{ fontSize: '0.7rem' }}>

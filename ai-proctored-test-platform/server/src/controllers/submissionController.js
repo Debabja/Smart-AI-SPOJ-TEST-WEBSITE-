@@ -58,6 +58,17 @@ const joinRoom = async (req, res, next) => {
     const room = await Room.findOne({ roomCode });
     if (!room) return res.status(404).json({ error: 'Room not found' });
 
+    // BUG-22: Check parent test status first — block joins if test is not LIVE regardless of room status or timer
+    const test = await Test.findById(room.testId).populate('questionSetId');
+    if (!test) return res.status(404).json({ error: 'Test not found' });
+
+    if (test.status === 'ENDED') {
+      return res.status(403).json({ error: 'This test is no longer active' });
+    }
+    if (test.status !== 'LIVE') {
+      return res.status(403).json({ error: 'This test has not started yet' });
+    }
+
     if (room.status === 'CLOSED') {
       return res.status(403).json({ error: 'Room is closed' });
     }
@@ -65,14 +76,6 @@ const joinRoom = async (req, res, next) => {
     // Verify password
     if (room.roomPassword !== roomPassword) {
       return res.status(403).json({ error: 'Invalid room password' });
-    }
-
-    const test = await Test.findById(room.testId).populate('questionSetId');
-    if (!test) return res.status(404).json({ error: 'Test not found' });
-
-    // Condition (a): Test.status must be LIVE
-    if (test.status !== 'LIVE') {
-      return res.status(403).json({ error: 'This test has not started yet' });
     }
 
     const candidate = await Candidate.findById(req.user.id);

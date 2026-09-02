@@ -203,13 +203,23 @@ const endTest = async (req, res, next) => {
     );
     if (!test) return res.status(404).json({ error: 'Test not found' });
 
-    // Section 10.2: broadcast test:ended to all candidates in the test (forces auto-submit)
+    // BUG-22: Automatically transition all rooms for this test from ACTIVE to CLOSED
+    const Room = require('../models/Room');
+    await Room.updateMany(
+      { testId: test._id, status: 'ACTIVE' },
+      { status: 'CLOSED' }
+    );
+
+    // Section 10.2: broadcast test:ended to all candidates and admins
     const io = req.app.get('io');
-    io.to(`test:${test._id}:admin`).emit('test:ended', { testId: test._id });
-    // Broadcast to all candidate rooms for this test
-    // Candidates are in rooms test:{testId}:room:{roomId} — we emit to test:{testId}:* pattern
-    // Socket.io doesn't support wildcards natively; we use a dedicated test-level room for broadcasts
-    io.to(`test:${test._id}`).emit('test:ended', { testId: test._id });
+    if (io) {
+      io.to(`test:${test._id}:admin`).emit('test:ended', { testId: test._id });
+      io.to(`test:${test._id}:admin`).emit('room:updated', { testId: test._id, action: 'ROOMS_CLOSED' });
+      // Broadcast to all candidate rooms for this test
+      // Candidates are in rooms test:{testId}:room:{roomId} — we emit to test:{testId}:* pattern
+      // Socket.io doesn't support wildcards natively; we use a dedicated test-level room for broadcasts
+      io.to(`test:${test._id}`).emit('test:ended', { testId: test._id });
+    }
 
     // Trigger final evaluation pass (evaluation worker)
     const evaluationService = require('../services/evaluationService');

@@ -84,6 +84,12 @@ const createRoom = async (req, res, next) => {
 // ── GET /tests/:testId/rooms ──────────────────────────────────────────────────
 const getRooms = async (req, res, next) => {
   try {
+    const test = await Test.findById(req.params.testId, 'status');
+    if (test && test.status === 'ENDED') {
+      // BUG-22: Self-healing synchronization: if test is ENDED, all rooms must be CLOSED
+      await Room.updateMany({ testId: req.params.testId, status: 'ACTIVE' }, { status: 'CLOSED' });
+    }
+
     const rooms = await Room.find({ testId: req.params.testId });
     const now = Date.now();
     const activeSubmissions = await Submission.find({
