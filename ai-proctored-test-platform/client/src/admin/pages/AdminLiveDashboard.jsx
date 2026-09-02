@@ -45,8 +45,9 @@ const getCandidateRemainingMs = (candidate, currentNow) => {
 
 // ── Memoized Seat Tile (FR-7.3: Persistent Malpractice counter beside name) ────
 const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
-  const color = STATUS_COLORS[candidate.colorStatus] || STATUS_COLORS.WHITE;
-  const isWhite = candidate.colorStatus === 'WHITE' || !candidate.colorStatus;
+  const isCandidateInProgress = candidate.status === 'IN_PROGRESS';
+  const color = STATUS_COLORS[candidate.colorStatus] || (isCandidateInProgress ? STATUS_COLORS.YELLOW : STATUS_COLORS.WHITE);
+  const isWhite = color === STATUS_COLORS.WHITE && !isCandidateInProgress;
   const malpracticeCount = candidate.malpracticeCount || 0;
 
   const remainingMs = getCandidateRemainingMs(candidate, now);
@@ -57,17 +58,20 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
     if (candidate.status === 'DISQUALIFIED') {
       return 'Disqualified';
     }
-    if (!candidate.candidateStartTime && (candidate.colorStatus === 'WHITE' || !candidate.colorStatus)) {
+    if (candidate.status === 'NOT_STARTED' || (!candidate.candidateStartTime && !isCandidateInProgress && (candidate.colorStatus === 'WHITE' || !candidate.colorStatus))) {
       return 'Not started';
     }
-    if (remainingMs <= 0) {
+    if (remainingMs <= 0 && candidate.candidateEndTime) {
       return 'Time up';
     }
-    const totalSec = Math.floor(remainingMs / 1000);
-    const mins = Math.floor(totalSec / 60);
-    const secs = totalSec % 60;
-    return `${mins}m ${secs < 10 ? '0' : ''}${secs}s left`;
-  }, [candidate.status, candidate.candidateStartTime, candidate.colorStatus, remainingMs]);
+    if (remainingMs > 0) {
+      const totalSec = Math.floor(remainingMs / 1000);
+      const mins = Math.floor(totalSec / 60);
+      const secs = totalSec % 60;
+      return `${mins}m ${secs < 10 ? '0' : ''}${secs}s left`;
+    }
+    return isCandidateInProgress ? 'In Progress' : 'Not started';
+  }, [candidate.status, candidate.candidateStartTime, candidate.candidateEndTime, candidate.colorStatus, remainingMs, isCandidateInProgress]);
 
   return (
     <div
@@ -86,6 +90,7 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
         boxShadow: isWhite ? 'none' : `0 2px 8px ${color}20`,
         position: 'relative',
         overflow: 'hidden',
+        opacity: isWhite ? 0.75 : 1,
       }}
       className="seat-tile-hover"
     >
@@ -100,9 +105,9 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
               overflow: 'hidden',
               textOverflow: 'ellipsis',
             }}
-            title={candidate.name}
+            title={candidate.name || candidate.candidateName}
           >
-            {candidate.name || 'Candidate'}
+            {candidate.name || candidate.candidateName || 'Candidate'}
           </strong>
 
           {/* FR-7.3: Persistent Malpractice Counter directly beside candidate name */}
@@ -134,15 +139,17 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
             boxShadow: `0 0 6px ${color}`,
             flexShrink: 0,
           }}
-          title={`Status: ${candidate.colorStatus || 'WHITE'}`}
+          title={`Status: ${candidate.colorStatus || (isCandidateInProgress ? 'YELLOW' : 'WHITE')}`}
         />
       </div>
 
       {/* Room and progress */}
       <div style={{ margin: '6px 0', fontSize: '0.75rem', color: '#6b7280' }}>
-        <div>{roomName || 'Room'}</div>
+        <div>{roomName || candidate.roomName || 'Room'}</div>
         <div style={{ fontWeight: 600, color: '#374151', marginTop: 2 }}>
-          {candidate.questionsCompleted !== undefined ? `${candidate.questionsCompleted} Qs Solved` : 'Not started'}
+          {candidate.status === 'NOT_STARTED'
+            ? 'Not started'
+            : `${candidate.questionsCompleted ?? 0} Qs Solved`}
         </div>
       </div>
 
@@ -160,7 +167,7 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
             textTransform: 'uppercase',
           }}
         >
-          {candidate.colorStatus || 'WHITE'}
+          {candidate.colorStatus || (isCandidateInProgress ? 'YELLOW' : 'WHITE')}
         </span>
       </div>
     </div>
@@ -169,7 +176,9 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
 
 // ── Memoized Table Row Component (FR-7.3: Persistent Malpractice counter beside name) ──
 const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqualify, style, now }) => {
-  const color = STATUS_COLORS[candidate.colorStatus] || STATUS_COLORS.WHITE;
+  const isCandidateInProgress = candidate.status === 'IN_PROGRESS';
+  const color = STATUS_COLORS[candidate.colorStatus] || (isCandidateInProgress ? STATUS_COLORS.YELLOW : STATUS_COLORS.WHITE);
+  const isWhite = color === STATUS_COLORS.WHITE && !isCandidateInProgress;
   const malpracticeCount = candidate.malpracticeCount || 0;
 
   const remainingMs = getCandidateRemainingMs(candidate, now);
@@ -180,17 +189,20 @@ const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqua
     if (candidate.status === 'DISQUALIFIED') {
       return 'Disqualified';
     }
-    if (!candidate.candidateStartTime && (candidate.colorStatus === 'WHITE' || !candidate.colorStatus)) {
+    if (candidate.status === 'NOT_STARTED' || (!candidate.candidateStartTime && !isCandidateInProgress && (candidate.colorStatus === 'WHITE' || !candidate.colorStatus))) {
       return 'Not started';
     }
-    if (remainingMs <= 0) {
+    if (remainingMs <= 0 && candidate.candidateEndTime) {
       return '00m 00s (Time up)';
     }
-    const totalSec = Math.floor(remainingMs / 1000);
-    const mins = Math.floor(totalSec / 60);
-    const secs = totalSec % 60;
-    return `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
-  }, [candidate.status, candidate.candidateStartTime, candidate.colorStatus, remainingMs]);
+    if (remainingMs > 0) {
+      const totalSec = Math.floor(remainingMs / 1000);
+      const mins = Math.floor(totalSec / 60);
+      const secs = totalSec % 60;
+      return `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+    }
+    return isCandidateInProgress ? 'In Progress' : 'Not started';
+  }, [candidate.status, candidate.candidateStartTime, candidate.candidateEndTime, candidate.colorStatus, remainingMs, isCandidateInProgress]);
 
   return (
     <div
@@ -203,6 +215,7 @@ const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqua
         borderBottom: '1px solid #f3f4f6',
         fontSize: '0.85rem',
         background: 'white',
+        opacity: isWhite ? 0.7 : 1,
       }}
     >
       {/* Candidate Name + Persistent Malpractice Counter (FR-7.3) */}
@@ -214,10 +227,11 @@ const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqua
             borderRadius: '50%',
             backgroundColor: color,
             flexShrink: 0,
+            boxShadow: isCandidateInProgress ? `0 0 6px ${color}` : 'none',
           }}
         />
         <strong style={{ color: '#1A2B3C', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {candidate.name}
+          {candidate.name || candidate.candidateName || 'Candidate'}
         </strong>
         {/* FR-7.3: Persistent Malpractice counter directly beside name */}
         <span
@@ -237,25 +251,25 @@ const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqua
         </span>
       </div>
 
-      <div style={{ color: '#4b5563' }}>{roomName}</div>
+      <div style={{ color: '#4b5563' }}>{roomName || candidate.roomName || 'Room'}</div>
 
       <div>
         <span
           className="badge"
           style={{
             background: `${color}20`,
-            color: color === '#F1C40F' ? '#b45309' : color,
+            color: color === '#F1C40F' ? '#b45309' : (color === '#E0E0E0' ? '#6b7280' : color),
             border: `1px solid ${color}60`,
             fontSize: '0.72rem',
             fontWeight: 600,
           }}
         >
-          {candidate.status || candidate.colorStatus || 'IN_PROGRESS'}
+          {candidate.status || (isCandidateInProgress ? 'IN_PROGRESS' : candidate.colorStatus) || 'IN_PROGRESS'}
         </span>
       </div>
 
       <div style={{ color: '#1A2B3C', fontWeight: 600 }}>
-        {candidate.questionsCompleted ?? 0}
+        {candidate.status === 'NOT_STARTED' ? '—' : (candidate.questionsCompleted ?? 0)}
       </div>
 
       <div>
@@ -353,12 +367,13 @@ export default function AdminLiveDashboard() {
 
   // Fetch candidate malpractice logs whenever inspect modal opens
   useEffect(() => {
-    if (!inspectCandidate?.candidateId) {
+    const targetCid = inspectCandidate?.candidateId || inspectCandidate?.id || inspectCandidate?._id;
+    if (!targetCid) {
       setCandidateLogs([]);
       return;
     }
     setLoadingLogs(true);
-    api.getCandidateMalpracticeLogs(testId, inspectCandidate.candidateId)
+    api.getCandidateMalpracticeLogs(testId, targetCid)
       .then((res) => {
         setCandidateLogs(res.data.malpracticeLogs || []);
       })
@@ -397,6 +412,7 @@ export default function AdminLiveDashboard() {
           for (const [cid, cand] of Object.entries(liveRes.data.candidates)) {
             initialMap[cid] = {
               ...cand,
+              candidateId: cid,
               candidateEndTime: cand.candidateEndTime || (cand.timeRemaining ? new Date(initialNow + cand.timeRemaining).toISOString() : null),
               candidateStartTime: cand.candidateStartTime || null,
               lastSyncedAt: initialNow,
@@ -418,6 +434,28 @@ export default function AdminLiveDashboard() {
     return () => { isMounted = false; };
   }, [testId]);
 
+  // Periodic background refresh to keep candidate roster in sync with DB
+  useEffect(() => {
+    const interval = setInterval(() => {
+      api.getLiveCandidates(testId).then((res) => {
+        if (res.data?.candidates) {
+          setCandidatesMap((prev) => {
+            const updated = { ...prev };
+            for (const [cid, cand] of Object.entries(res.data.candidates)) {
+              updated[cid] = {
+                ...(updated[cid] || {}),
+                ...cand,
+                candidateId: cid,
+              };
+            }
+            return updated;
+          });
+        }
+      }).catch(() => {});
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [testId]);
+
   // Flush debounced socket updates to React state
   const flushDebounceBuffer = useCallback(() => {
     if (Object.keys(debounceBufferRef.current).length === 0) return;
@@ -427,13 +465,19 @@ export default function AdminLiveDashboard() {
       const currentNow = Date.now();
       for (const [cid, data] of Object.entries(debounceBufferRef.current)) {
         const existing = updated[cid] || {};
-        const endTime = data.candidateEndTime || existing.candidateEndTime || (data.timeRemaining ? new Date(currentNow + data.timeRemaining).toISOString() : null);
+        const cleanedData = {};
+        for (const [k, v] of Object.entries(data)) {
+          if (v !== undefined && v !== null) {
+            cleanedData[k] = v;
+          }
+        }
+        const endTime = cleanedData.candidateEndTime || existing.candidateEndTime || (cleanedData.timeRemaining ? new Date(currentNow + cleanedData.timeRemaining).toISOString() : null);
         updated[cid] = {
           ...existing,
-          ...data,
+          ...cleanedData,
           candidateId: cid,
           candidateEndTime: endTime,
-          candidateStartTime: data.candidateStartTime || existing.candidateStartTime || null,
+          candidateStartTime: cleanedData.candidateStartTime || existing.candidateStartTime || null,
           lastSyncedAt: currentNow,
         };
       }
@@ -510,19 +554,57 @@ export default function AdminLiveDashboard() {
       
       // Update candidate's persistent malpractice counter in map (FR-7.3)
       if (alertData.candidateId) {
+        const cid = alertData.candidateId;
         setCandidatesMap((prev) => {
-          const current = prev[alertData.candidateId] || {};
+          const current = prev[cid] || {};
           return {
             ...prev,
-            [alertData.candidateId]: {
+            [cid]: {
               ...current,
+              candidateId: cid,
+              name: current.name || alertData.candidateName,
+              email: current.email || alertData.candidateEmail,
+              roomId: current.roomId || alertData.roomId,
+              roomName: current.roomName || alertData.roomName,
+              status: current.status || 'IN_PROGRESS',
+              colorStatus: current.colorStatus || 'YELLOW',
               malpracticeCount: alertData.currentCount || (current.malpracticeCount || 0) + 1,
             },
           };
         });
+
+        // Also update inspectCandidate if currently inspecting this candidate
+        setInspectCandidate((prev) => {
+          if (!prev) return prev;
+          const prevId = prev.candidateId || prev.id || prev._id;
+          if (prevId === cid) {
+            return {
+              ...prev,
+              malpracticeCount: alertData.currentCount || (prev.malpracticeCount || 0) + 1,
+            };
+          }
+          return prev;
+        });
+
+        // Background sync to ensure all candidate details from server DB
+        api.getLiveCandidates(testId).then((res) => {
+          if (res.data?.candidates) {
+            setCandidatesMap((prev) => {
+              const updated = { ...prev };
+              for (const [id, cand] of Object.entries(res.data.candidates)) {
+                updated[id] = {
+                  ...(updated[id] || {}),
+                  ...cand,
+                  candidateId: id,
+                };
+              }
+              return updated;
+            });
+          }
+        }).catch(() => {});
       }
 
-      toast.error(`⚠️ Malpractice: ${alertData.candidateName} (${alertData.violationType})`, {
+      toast.error(`⚠️ Malpractice: ${alertData.candidateName || 'Candidate'} (${alertData.violationType})`, {
         duration: 5000,
       });
 
@@ -555,6 +637,21 @@ export default function AdminLiveDashboard() {
     // Section 10.2: room:updated
     const handleRoomUpdated = () => {
       api.getRooms(testId).then((res) => setRooms(res.data.rooms || [])).catch(() => {});
+      api.getLiveCandidates(testId).then((res) => {
+        if (res.data?.candidates) {
+          setCandidatesMap((prev) => {
+            const updated = { ...prev };
+            for (const [cid, cand] of Object.entries(res.data.candidates)) {
+              updated[cid] = {
+                ...(updated[cid] || {}),
+                ...cand,
+                candidateId: cid,
+              };
+            }
+            return updated;
+          });
+        }
+      }).catch(() => {});
     };
 
     // Section 10.2: test:ended
@@ -1382,9 +1479,11 @@ export default function AdminLiveDashboard() {
                 {/* Top Info Card */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f8fafc', padding: 14, borderRadius: 8, border: '1px solid #e2e8f0' }}>
                   <div>
-                    <h4 style={{ fontSize: '1.15rem', color: '#1A2B3C', fontWeight: 800, margin: 0 }}>{inspectCandidate.name}</h4>
+                    <h4 style={{ fontSize: '1.15rem', color: '#1A2B3C', fontWeight: 800, margin: 0 }}>
+                      {inspectCandidate.name || inspectCandidate.candidateName || 'Candidate'}
+                    </h4>
                     <span style={{ fontSize: '0.85rem', color: '#64748b' }}>
-                      {inspectCandidate.email || 'Candidate'} · Room: <strong>{roomsById[inspectCandidate.roomId] || inspectCandidate.roomName || 'Assigned Room'}</strong>
+                      {inspectCandidate.email || inspectCandidate.candidateEmail || ''} {inspectCandidate.email || inspectCandidate.candidateEmail ? '·' : ''} Room: <strong>{roomsById[inspectCandidate.roomId] || inspectCandidate.roomName || 'Assigned Room'}</strong>
                     </span>
                   </div>
                   <span
@@ -1407,7 +1506,7 @@ export default function AdminLiveDashboard() {
                   <div>
                     <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>Questions Solved:</span>
                     <strong style={{ display: 'block', color: '#1A2B3C', fontSize: '1.1rem', marginTop: 2 }}>
-                      {inspectCandidate.questionsCompleted ?? 0}
+                      {inspectCandidate.status === 'NOT_STARTED' ? '—' : (inspectCandidate.questionsCompleted ?? 0)}
                     </strong>
                   </div>
                   <div>
@@ -1419,9 +1518,15 @@ export default function AdminLiveDashboard() {
                   <div>
                     <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>Time Remaining:</span>
                     <span style={{ display: 'block', fontFamily: 'monospace', fontWeight: 700, color: '#374151', fontSize: '0.95rem', marginTop: 2 }}>
-                      {inspectCandidate.timeRemaining !== undefined
-                        ? `${Math.floor(inspectCandidate.timeRemaining / 60000)}m ${Math.floor((inspectCandidate.timeRemaining % 60000) / 1000)}s`
-                        : '—'}
+                      {(() => {
+                        const rem = getCandidateRemainingMs(inspectCandidate, now);
+                        if (inspectCandidate.status === 'SUBMITTED' || inspectCandidate.status === 'AUTO_SUBMITTED_TIME_UP') return 'Submitted';
+                        if (inspectCandidate.status === 'DISQUALIFIED') return 'Disqualified';
+                        if (inspectCandidate.status === 'NOT_STARTED') return 'Not started';
+                        if (rem > 0) return `${Math.floor(rem / 60000)}m ${Math.floor((rem % 60000) / 1000)}s`;
+                        if (inspectCandidate.candidateEndTime) return '00m 00s (Time up)';
+                        return inspectCandidate.status === 'IN_PROGRESS' ? 'In Progress' : '—';
+                      })()}
                     </span>
                   </div>
                 </div>
@@ -1443,12 +1548,21 @@ export default function AdminLiveDashboard() {
                       Loading violation proof history...
                     </div>
                   ) : candidateLogs.length === 0 ? (
-                    <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', padding: '16px', borderRadius: 8, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ fontSize: '1.4rem' }}>✓</span>
-                      <div>
-                        <strong>Clean Record:</strong> No malpractice violations or suspicious events have been logged for this candidate.
+                    (inspectCandidate.malpracticeCount || 0) > 0 ? (
+                      <div style={{ background: '#fffbeb', border: '1px solid #fef3c7', color: '#b45309', padding: '16px', borderRadius: 8, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: '1.4rem' }}>⚠️</span>
+                        <div>
+                          <strong>Violations Recorded:</strong> {inspectCandidate.malpracticeCount} violation(s) registered for this candidate. Loading incident history...
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', padding: '16px', borderRadius: 8, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: '1.4rem' }}>✓</span>
+                        <div>
+                          <strong>Clean Record:</strong> No malpractice violations or suspicious events have been logged for this candidate.
+                        </div>
+                      </div>
+                    )
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 380, overflowY: 'auto', paddingRight: 4 }}>
                       {candidateLogs.map((log, index) => {

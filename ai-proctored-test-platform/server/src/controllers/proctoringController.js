@@ -119,16 +119,20 @@ const reportViolation = async (req, res, next) => {
       proofScreenshotUrl,
     });
 
-    const candidate = await Candidate.findById(candidateId, 'name');
+    const candidate = await Candidate.findById(candidateId, 'name email');
+    const Room = require('../models/Room');
+    const roomDoc = await Room.findById(roomId, 'roomName');
     const malpracticeCount = await MalpracticeLog.countDocuments({ candidateId, testId });
 
     // FR-7.3: (a) candidate:warning, (b) malpractice:alert to admin — within 2 seconds
     const io = req.app.get('io');
     io.to(`test:${testId}:admin`).emit('malpractice:alert', {
       malpracticeLogId: log._id,
-      candidateId,
-      candidateName: candidate?.name || 'Unknown',
-      roomId,
+      candidateId: candidateId.toString(),
+      candidateName: candidate?.name || 'Candidate',
+      candidateEmail: candidate?.email || '',
+      roomId: roomId ? roomId.toString() : null,
+      roomName: roomDoc?.roomName || 'Assigned Room',
       violationType,
       proofScreenshotUrl,
       currentCount: malpracticeCount,
@@ -141,8 +145,8 @@ const reportViolation = async (req, res, next) => {
 
     // Seat map update
     io.to(`test:${testId}:admin`).emit('seatmap:status', {
-      candidateId,
-      roomId,
+      candidateId: candidateId.toString(),
+      roomId: roomId ? roomId.toString() : null,
       colorStatus: 'YELLOW', // warning state; disqualified = RED handled below
     });
 

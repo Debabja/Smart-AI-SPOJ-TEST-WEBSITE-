@@ -84,6 +84,7 @@ services:
       POSTGRES_DB: judge0
       POSTGRES_USER: judge0
       POSTGRES_PASSWORD: judge0password
+      MAX_MEMORY_LIMIT: 2048000
     depends_on:
       - redis
       - postgres
@@ -100,6 +101,8 @@ services:
       POSTGRES_DB: judge0
       POSTGRES_USER: judge0
       POSTGRES_PASSWORD: judge0password
+      MAX_MEMORY_LIMIT: 2048000
+      COUNT: 2
     depends_on:
       - judge0
       - redis

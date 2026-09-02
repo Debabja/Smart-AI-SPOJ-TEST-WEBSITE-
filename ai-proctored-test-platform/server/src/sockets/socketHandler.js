@@ -70,19 +70,19 @@ const registerSocketHandlers = (io) => {
     // NFR: debounce/throttle max 1 re-render per 200ms per candidate (Section 13)
     // Server-side: we emit once per heartbeat — client-side debouncing is in React
     socket.on('candidate:heartbeat', async ({ candidateId, testId, currentQuestionId, questionsCompleted }) => {
-      if (socket.user?.type !== 'candidate' || socket.user?.id !== candidateId) {
+      if (socket.user?.type !== 'candidate' || (socket.user?.id !== candidateId && socket.user?._id !== candidateId)) {
         return;
       }
 
       try {
         const Candidate = require('../models/Candidate');
-        const candidate = await Candidate.findById(candidateId, 'name isDisqualified');
+        const candidate = await Candidate.findById(candidateId, 'name email isDisqualified');
 
         // Calculate time remaining from server-persisted candidateEndTime (NFR: resilience)
         const Submission = require('../models/Submission');
         const sub = await Submission.findOne(
           { candidateId, testId, status: 'IN_PROGRESS' },
-          { candidateEndTime: 1, roomId: 1 }
+          { candidateEndTime: 1, candidateStartTime: 1, roomId: 1 }
         );
         const timeRemaining = sub?.candidateEndTime
           ? Math.max(0, sub.candidateEndTime.getTime() - Date.now())
@@ -96,26 +96,32 @@ const registerSocketHandlers = (io) => {
           colorStatus = 'RED';
         } else if (questionsCompleted >= (test?.passingCriteria || Infinity)) {
           colorStatus = 'GREEN';
-        } else if (questionsCompleted === 0) {
-          colorStatus = 'WHITE'; // not started
+        } else if (!sub) {
+          colorStatus = 'WHITE'; // only white if test attempt has not started
         }
+
+        const Room = require('../models/Room');
+        const roomDoc = sub?.roomId ? await Room.findById(sub.roomId, 'roomName') : null;
 
         // Section 10.2: dashboard:update — broadcast to admins
         io.to(`test:${testId}:admin`).emit('dashboard:update', {
-          candidateId,
+          candidateId: candidateId.toString(),
           name: candidate?.name,
-          roomId: sub?.roomId,
-          status: candidate?.isDisqualified ? 'DISQUALIFIED' : 'IN_PROGRESS',
-          questionsCompleted,
+          email: candidate?.email,
+          roomId: sub?.roomId ? sub.roomId.toString() : null,
+          roomName: roomDoc?.roomName || 'Assigned Room',
+          status: candidate?.isDisqualified ? 'DISQUALIFIED' : (sub ? 'IN_PROGRESS' : 'NOT_STARTED'),
+          questionsCompleted: questionsCompleted || 0,
           timeRemaining,
           candidateEndTime: sub?.candidateEndTime,
           candidateStartTime: sub?.candidateStartTime,
+          colorStatus,
         });
 
         // Section 10.2: seatmap:status — broadcast to admins
         io.to(`test:${testId}:admin`).emit('seatmap:status', {
-          candidateId,
-          roomId: sub?.roomId,
+          candidateId: candidateId.toString(),
+          roomId: sub?.roomId ? sub.roomId.toString() : null,
           colorStatus,
         });
       } catch (err) {

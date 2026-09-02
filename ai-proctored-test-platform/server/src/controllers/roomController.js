@@ -245,6 +245,9 @@ const getLiveCandidates = async (req, res, next) => {
       .populate('candidateId', 'name email isDisqualified')
       .populate('roomId', 'roomName roomCode');
 
+    // Fetch all rooms for this test to also capture candidates who joined a room but haven't started yet
+    const rooms = await Room.find({ testId }).populate('joinedCandidates.candidateId', 'name email isDisqualified');
+
     // Fetch all malpractice logs for this test
     const MalpracticeLog = require('../models/MalpracticeLog');
     const malpracticeLogs = await MalpracticeLog.find({ testId });
@@ -257,29 +260,54 @@ const getLiveCandidates = async (req, res, next) => {
     const candidateMap = {};
     const now = Date.now();
 
+    // 1. Seed candidates from rooms (joined candidates who may not have started test yet)
+    for (const r of rooms) {
+      for (const j of r.joinedCandidates || []) {
+        const candidate = j.candidateId;
+        if (!candidate || !candidate._id) continue;
+        const cid = candidate._id.toString();
+        candidateMap[cid] = {
+          candidateId: cid,
+          name: candidate.name,
+          email: candidate.email,
+          roomId: r._id.toString(),
+          roomName: r.roomName || 'Assigned Room',
+          status: candidate.isDisqualified ? 'DISQUALIFIED' : 'NOT_STARTED',
+          timeRemaining: 0,
+          candidateStartTime: null,
+          candidateEndTime: null,
+          questionsCompleted: 0,
+          malpracticeCount: malpracticeCounts[cid] || 0,
+          colorStatus: candidate.isDisqualified ? 'RED' : 'WHITE',
+        };
+      }
+    }
+
+    // 2. Overlay / update with active or finished submissions
     for (const sub of submissions) {
       const candidate = sub.candidateId;
       if (!candidate) continue;
       const cid = candidate._id.toString();
 
-      if (!candidateMap[cid]) {
-        const timeRemaining = sub.candidateEndTime
-          ? Math.max(0, new Date(sub.candidateEndTime).getTime() - now)
-          : 0;
+      const timeRemaining = sub.candidateEndTime
+        ? Math.max(0, new Date(sub.candidateEndTime).getTime() - now)
+        : 0;
 
-        let colorStatus = 'YELLOW';
-        if (candidate.isDisqualified) {
-          colorStatus = 'RED';
-        } else if (sub.status === 'SUBMITTED' || sub.status === 'AUTO_SUBMITTED_TIME_UP') {
-          colorStatus = 'GREEN';
-        }
+      let colorStatus = 'YELLOW';
+      if (candidate.isDisqualified) {
+        colorStatus = 'RED';
+      } else if (sub.status === 'SUBMITTED' || sub.status === 'AUTO_SUBMITTED_TIME_UP') {
+        colorStatus = 'GREEN';
+      }
 
+      const existing = candidateMap[cid];
+      if (!existing || existing.status === 'NOT_STARTED') {
         candidateMap[cid] = {
           candidateId: cid,
-          name: candidate.name,
-          email: candidate.email,
-          roomId: sub.roomId?._id ? sub.roomId._id.toString() : sub.roomId?.toString(),
-          roomName: sub.roomId?.roomName || 'Unassigned Room',
+          name: candidate.name || existing?.name,
+          email: candidate.email || existing?.email,
+          roomId: sub.roomId?._id ? sub.roomId._id.toString() : (sub.roomId?.toString() || existing?.roomId),
+          roomName: sub.roomId?.roomName || existing?.roomName || 'Assigned Room',
           status: candidate.isDisqualified ? 'DISQUALIFIED' : sub.status,
           timeRemaining,
           candidateStartTime: sub.candidateStartTime,

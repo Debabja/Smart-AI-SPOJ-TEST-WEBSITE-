@@ -3,6 +3,26 @@
 // Judge0 API documentation: https://judge0.com/
 // Per PRD Section 5 & 9.5: ALL code execution runs strictly through sandboxed Judge0 instances
 const fetch = require('node-fetch');
+const { exec } = require('child_process');
+const path = require('path');
+
+let isAutoStartingContainers = false;
+
+const startJudge0Containers = () => {
+  if (isAutoStartingContainers) return;
+  isAutoStartingContainers = true;
+
+  const rootDir = path.resolve(__dirname, '../../../');
+  console.log('[Judge0] Auto-starting Judge0 docker containers via docker compose...');
+  exec('docker compose up -d redis postgres judge0 judge0-workers', { cwd: rootDir }, (err, stdout, stderr) => {
+    isAutoStartingContainers = false;
+    if (err) {
+      console.error('[Judge0] Failed to auto-start Judge0 containers:', err.message);
+    } else {
+      console.log('[Judge0] Containers successfully started:', stdout || stderr);
+    }
+  });
+};
 
 // Language ID mapping for Judge0 (standard IDs from Judge0 documentation)
 const LANGUAGE_IDS = {
@@ -51,7 +71,9 @@ const executeCode = async (code, language, stdin = '', expectedOutput = '') => {
     stdin: stdin || '',
     expected_output: expectedOutput || undefined,
     cpu_time_limit: 5,
-    memory_limit: 256 * 1024,
+    memory_limit: 1500000,
+    enable_per_process_and_thread_time_limit: true,
+    enable_per_process_and_thread_memory_limit: true,
   });
 
   const sendToJudge0 = async (baseUrl) => {
@@ -60,7 +82,7 @@ const executeCode = async (code, language, stdin = '', expectedOutput = '') => {
       method: 'POST',
       headers,
       body: payload,
-      timeout: 12000,
+      timeout: 15000,
     });
     if (!response.ok) {
       const errText = await response.text();
@@ -82,6 +104,7 @@ const executeCode = async (code, language, stdin = '', expectedOutput = '') => {
     }
   } catch (err) {
     console.error('[Judge0] Code execution request failed:', err.message);
+    startJudge0Containers();
     return {
       stdout: null,
       stderr: `Judge0 execution service unavailable: ${err.message}. Please verify the Judge0 container is running.`,

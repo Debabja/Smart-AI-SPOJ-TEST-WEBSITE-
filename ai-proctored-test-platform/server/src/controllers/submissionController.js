@@ -80,7 +80,22 @@ const joinRoom = async (req, res, next) => {
       });
       io.to(`test:${room.testId}:admin`).emit('dashboard:update', {
         testId: room.testId,
-        candidateId,
+        candidateId: candidateId.toString(),
+        name: candidate?.name,
+        email: candidate?.email,
+        roomId: room._id.toString(),
+        roomName: room.roomName || 'Assigned Room',
+        status: 'NOT_STARTED',
+        colorStatus: 'WHITE',
+        questionsCompleted: 0,
+        timeRemaining: 0,
+        candidateStartTime: null,
+        candidateEndTime: null,
+      });
+      io.to(`test:${room.testId}:admin`).emit('seatmap:status', {
+        candidateId: candidateId.toString(),
+        roomId: room._id.toString(),
+        colorStatus: 'WHITE',
       });
     }
 
@@ -246,16 +261,29 @@ const startAttempt = async (req, res, next) => {
     const io = req.app.get('io');
     if (io) {
       const Candidate = require('../models/Candidate');
-      Candidate.findById(candidateId, 'name email').then((cand) => {
-        io.to(`test:${testId}:admin`).emit('dashboard:update', {
-          candidateId,
+      const Room = require('../models/Room');
+      Promise.all([
+        Candidate.findById(candidateId, 'name email'),
+        targetRoomId ? Room.findById(targetRoomId, 'roomName') : null,
+      ]).then(([cand, roomDoc]) => {
+        const payload = {
+          candidateId: candidateId.toString(),
           name: cand?.name,
-          roomId: targetRoomId,
+          email: cand?.email,
+          roomId: targetRoomId ? targetRoomId.toString() : null,
+          roomName: roomDoc?.roomName || 'Assigned Room',
           status: 'IN_PROGRESS',
+          colorStatus: 'YELLOW',
           questionsCompleted: 0,
           timeRemaining: msUntilEnd,
           candidateStartTime,
           candidateEndTime,
+        };
+        io.to(`test:${testId}:admin`).emit('dashboard:update', payload);
+        io.to(`test:${testId}:admin`).emit('seatmap:status', {
+          candidateId: candidateId.toString(),
+          roomId: targetRoomId ? targetRoomId.toString() : null,
+          colorStatus: 'YELLOW',
         });
       }).catch(() => {});
     }
