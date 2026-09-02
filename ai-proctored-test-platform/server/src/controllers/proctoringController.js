@@ -205,6 +205,19 @@ const reviewMalpractice = async (req, res, next) => {
         roomId: log.roomId,
         colorStatus: 'RED',
       });
+
+      // Update candidate status on admin live dashboard
+      io.to(`test:${log.testId}:admin`).emit('dashboard:update', {
+        candidateId: log.candidateId.toString(),
+        roomId: log.roomId ? log.roomId.toString() : null,
+        status: 'DISQUALIFIED',
+        colorStatus: 'RED',
+        timeRemaining: 0,
+      });
+
+      // BUG-21: Recompute and broadcast Tentative Time if disqualified candidate was the leader
+      const { broadcastTentativeTime } = require('./submissionController');
+      broadcastTentativeTime(io, log.testId, log.roomId);
     }
 
     res.json({ malpracticeLog: log });

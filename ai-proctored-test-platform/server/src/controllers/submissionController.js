@@ -8,6 +8,42 @@ const Submission = require('../models/Submission');
 const Candidate = require('../models/Candidate');
 const judge0Service = require('../services/judge0Service');
 
+// BUG-21: Tentative Time = MAX remaining time (candidateEndTime - now) among candidates currently IN_PROGRESS
+const broadcastTentativeTime = async (io, testId, targetRoomId = null) => {
+  if (!io) return;
+  try {
+    const now = Date.now();
+    const activeSubmissions = await Submission.find({
+      testId,
+      status: 'IN_PROGRESS',
+      candidateEndTime: { $gt: new Date(now) },
+    }, { roomId: 1, candidateEndTime: 1 });
+
+    let overallMaxMs = 0;
+    let roomMaxMs = 0;
+
+    for (const sub of activeSubmissions) {
+      if (sub.candidateEndTime) {
+        const rem = Math.max(0, new Date(sub.candidateEndTime).getTime() - now);
+        if (rem > overallMaxMs) overallMaxMs = rem;
+        if (targetRoomId && sub.roomId?.toString() === targetRoomId.toString() && rem > roomMaxMs) {
+          roomMaxMs = rem;
+        }
+      }
+    }
+
+    // ASSUMPTION: If no candidates in progress, remaining time is 0 / null ("—" or "Not started" placeholder)
+    io.to(`test:${testId}:admin`).emit('room:tentative-time', {
+      testId: testId.toString(),
+      roomId: targetRoomId ? targetRoomId.toString() : null,
+      roomTentativeTimeRemainingMs: roomMaxMs,
+      overallTentativeTimeRemainingMs: overallMaxMs,
+    });
+  } catch (err) {
+    console.error('[TentativeTime] broadcast error:', err);
+  }
+};
+
 // ── POST /rooms/join ──────────────────────────────────────────────────────────
 // Body: { roomCode, roomPassword }
 // Response: { test, room, instructions }
@@ -249,6 +285,10 @@ const startAttempt = async (req, res, next) => {
 
         console.log(`[AutoSubmit] Candidate ${candidateId} test ${testId} auto-submitted at time-up`);
 
+        // BUG-21: Broadcast updated Tentative Time if leader auto-submitted
+        const io = req.app.get('io');
+        broadcastTentativeTime(io, testId, targetRoomId);
+
         // Trigger evaluation
         const evaluationService = require('../services/evaluationService');
         evaluationService.evaluateCandidateSubmissions(candidateId, testId).catch(console.error);
@@ -285,6 +325,8 @@ const startAttempt = async (req, res, next) => {
           roomId: targetRoomId ? targetRoomId.toString() : null,
           colorStatus: 'YELLOW',
         });
+        // BUG-21: Broadcast updated Tentative Time immediately on candidate start
+        broadcastTentativeTime(io, testId, targetRoomId);
       }).catch(() => {});
     }
 
@@ -472,6 +514,11 @@ const submitAll = async (req, res, next) => {
       candidateName: candidate?.name || 'Unknown',
     });
 
+    // BUG-21: Broadcast updated Tentative Time immediately on candidate submit
+    Submission.findOne({ candidateId, testId }, { roomId: 1 }).then((s) => {
+      broadcastTentativeTime(io, testId, s?.roomId);
+    }).catch(() => {});
+
     // Trigger evaluation for all submissions
     const evaluationService = require('../services/evaluationService');
     evaluationService.evaluateCandidateSubmissions(candidateId, testId).catch(console.error);
@@ -490,4 +537,5 @@ module.exports = {
   saveCode,
   submitCode,
   submitAll,
+  broadcastTentativeTime,
 };

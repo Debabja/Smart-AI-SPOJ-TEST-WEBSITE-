@@ -17,6 +17,7 @@ import {
   onTestEnded, offTestEnded,
   onLateJoinRequest, offLateJoinRequest,
   onLateJoinProcessed, offLateJoinProcessed,
+  onRoomTentativeTime, offRoomTentativeTime,
 } from '../../services/socketClient';
 
 // Exact Section 14 colors
@@ -711,6 +712,25 @@ export default function AdminLiveDashboard() {
       setLateJoinRequests((prev) => prev.filter((r) => r.candidateId !== procData.candidateId));
     };
 
+    // Section 10.2: room:tentative-time (BUG-21)
+    const handleRoomTentativeTime = () => {
+      api.getLiveCandidates(testId).then((res) => {
+        if (res.data?.candidates) {
+          setCandidatesMap((prev) => {
+            const updated = { ...prev };
+            for (const [cid, cand] of Object.entries(res.data.candidates)) {
+              updated[cid] = {
+                ...(updated[cid] || {}),
+                ...cand,
+                candidateId: cid,
+              };
+            }
+            return updated;
+          });
+        }
+      }).catch(() => {});
+    };
+
     onDashboardUpdate(handleDashboardUpdate);
     onSeatmapStatus(handleSeatmapStatus);
     onMalpracticeAlert(handleMalpracticeAlert);
@@ -719,6 +739,7 @@ export default function AdminLiveDashboard() {
     onTestEnded(handleTestEnded);
     onLateJoinRequest(handleLateJoinReq);
     onLateJoinProcessed(handleLateJoinProc);
+    onRoomTentativeTime(handleRoomTentativeTime);
 
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
@@ -730,6 +751,8 @@ export default function AdminLiveDashboard() {
       offTestEnded(handleTestEnded);
       offLateJoinRequest(handleLateJoinReq);
       offLateJoinProcessed(handleLateJoinProc);
+      offRoomTentativeTime(handleRoomTentativeTime);
+      disconnectSocket();
     };
   }, [testId, user?.id, flushDebounceBuffer, announceCandidateSubmission]);
 
@@ -859,7 +882,7 @@ export default function AdminLiveDashboard() {
     };
   }, [candidatesMap]);
 
-  // Aggregate / Tentative Timer Calculation (for all active candidates)
+  // Aggregate / Tentative Timer Calculation (BUG-21: MAXIMUM remaining time among IN_PROGRESS candidates)
   const [now, setNow] = useState(Date.now());
 
   // 1-second client-side ticker for smooth countdown (Requirement 2c)
@@ -871,19 +894,20 @@ export default function AdminLiveDashboard() {
   }, []);
 
   const tentativeTimer = useMemo(() => {
-    if (!test) return { formatted: '--:--', avgMinutes: 0, maxMinutes: 0, activeCount: 0 };
+    // ASSUMPTION: If test is not loaded or status is not live, show appropriate fallback
+    if (!test) return { formatted: '—', rawMs: 0, hasActive: false };
     if (test.status === 'ENDED') {
-      return { formatted: '00:00 (Concluded)', avgMinutes: 0, maxMinutes: 0, activeCount: 0 };
+      return { formatted: '00:00 (Concluded)', rawMs: 0, hasActive: false };
     }
 
-    // Active candidates in current view (matching selectedRoomId)
-    const activeCandidatesInView = Object.values(candidatesMap).filter((c) => {
+    // Filter in-progress candidates in current view (matching selectedRoomId or ALL rooms combined)
+    const inProgressCandidates = Object.values(candidatesMap).filter((c) => {
       const cRoomId = typeof c.roomId === 'object' ? (c.roomId?._id || c.roomId?.id) : c.roomId;
       const matchesRoom = selectedRoomId === 'ALL' || String(cRoomId) === String(selectedRoomId);
       if (!matchesRoom) return false;
 
-      // Finished or disqualified candidates are not active in session
-      if (c.status === 'SUBMITTED' || c.status === 'AUTO_SUBMITTED_TIME_UP' || c.status === 'DISQUALIFIED') {
+      // Only candidates who have actively started and are IN_PROGRESS (not submitted/disqualified/time-up)
+      if (c.status !== 'IN_PROGRESS' || !c.candidateStartTime) {
         return false;
       }
 
@@ -891,20 +915,26 @@ export default function AdminLiveDashboard() {
       return remaining > 0;
     });
 
-    const activeTimes = activeCandidatesInView.map((c) => getCandidateRemainingMs(c, now));
-
-    // Requirement 2b: If 0 connected/active candidates, display neutral state "--:--" instead of misleading "60m 00s"
-    if (activeTimes.length === 0) {
+    // ASSUMPTION: If no candidates are currently in progress in the selected scope (none started yet or all finished),
+    // display "—" (or "Not started" if room has joined candidates who haven't started yet) as a clear fallback.
+    if (inProgressCandidates.length === 0) {
+      const candidatesInScope = Object.values(candidatesMap).filter((c) => {
+        const cRoomId = typeof c.roomId === 'object' ? (c.roomId?._id || c.roomId?.id) : c.roomId;
+        return selectedRoomId === 'ALL' || String(cRoomId) === String(selectedRoomId);
+      });
+      const hasPendingNotStarted = candidatesInScope.some(
+        (c) => c.status === 'NOT_STARTED' || (!c.candidateStartTime && c.status !== 'SUBMITTED' && c.status !== 'AUTO_SUBMITTED_TIME_UP')
+      );
       return {
-        formatted: '--:--',
-        avgMinutes: 0,
-        maxMinutes: 0,
-        activeCount: 0,
+        formatted: hasPendingNotStarted ? 'Not started' : '—',
+        rawMs: 0,
+        hasActive: false,
       };
     }
 
-    const avgMs = Math.round(activeTimes.reduce((a, b) => a + b, 0) / activeTimes.length);
-    const maxMs = Math.max(...activeTimes);
+    // BUG-21: Tentative Time = MAX remaining time (candidateEndTime - now) among candidates currently IN_PROGRESS
+    const remainingTimes = inProgressCandidates.map((c) => getCandidateRemainingMs(c, now));
+    const maxRemainingMs = Math.max(...remainingTimes);
 
     const formatMs = (ms) => {
       const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -919,11 +949,9 @@ export default function AdminLiveDashboard() {
     };
 
     return {
-      formatted: formatMs(avgMs),
-      maxFormatted: formatMs(maxMs),
-      avgMinutes: Math.floor(avgMs / 60000),
-      maxMinutes: Math.floor(maxMs / 60000),
-      activeCount: activeTimes.length,
+      formatted: formatMs(maxRemainingMs),
+      rawMs: maxRemainingMs,
+      hasActive: true,
     };
   }, [candidatesMap, selectedRoomId, test, now]);
 
@@ -994,7 +1022,7 @@ export default function AdminLiveDashboard() {
                   {test?.testType}
                 </span>
 
-                {/* Aggregate / Tentative Timer Badge */}
+                {/* Tentative Time Badge (BUG-21: Maximum remaining time indicating when the session concludes) */}
                 <div
                   style={{
                     display: 'inline-flex',
@@ -1006,14 +1034,18 @@ export default function AdminLiveDashboard() {
                     border: '1px solid #334155',
                     boxShadow: '0 2px 6px rgba(0,0,0,0.12)',
                   }}
-                  title={`Tentative average time remaining across ${tentativeTimer.activeCount} active candidate(s)`}
+                  title={
+                    tentativeTimer.hasActive
+                      ? `Tentative Time: Session concludes when the last candidate finishes in ${tentativeTimer.formatted}`
+                      : 'Tentative Time'
+                  }
                 >
                   <span style={{ fontSize: '1rem' }}>⏱️</span>
                   <div>
                     <div style={{ fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94A3B8', fontWeight: 700 }}>
-                      Avg Session Timer
+                      Tentative Time
                     </div>
-                    <div style={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 800, color: tentativeTimer.activeCount > 0 ? '#38BDF8' : '#94A3B8', letterSpacing: '0.03em', lineHeight: 1.1 }}>
+                    <div style={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 800, color: tentativeTimer.hasActive ? '#38BDF8' : '#94A3B8', letterSpacing: '0.03em', lineHeight: 1.1 }}>
                       {tentativeTimer.formatted}
                     </div>
                   </div>
@@ -1146,14 +1178,6 @@ export default function AdminLiveDashboard() {
           <div className="stat-card">
             <div className="stat-value">{stats.total}</div>
             <div className="stat-label">Active Candidates</div>
-          </div>
-          <div className="stat-card" style={{ borderLeft: '4px solid #0EA5E9' }}>
-            <div className="stat-value" style={{ color: tentativeTimer.activeCount > 0 ? '#0284c7' : '#9ca3af', fontFamily: 'monospace', fontSize: '1.4rem' }}>
-              {tentativeTimer.formatted}
-            </div>
-            <div className="stat-label">
-              {tentativeTimer.activeCount > 0 ? `Avg Session Timer (${tentativeTimer.activeCount} active)` : 'Avg Session Timer'}
-            </div>
           </div>
           <div className="stat-card" style={{ borderLeft: `4px solid ${STATUS_COLORS.GREEN}` }}>
             <div className="stat-value" style={{ color: STATUS_COLORS.GREEN }}>{stats.green}</div>

@@ -99,6 +99,9 @@ export const offTestEnded = (cb) => { socket?.off('test:ended', cb); };
 export const onRoomUpdated = (cb) => { socket?.on('room:updated', cb); };
 export const offRoomUpdated = (cb) => { socket?.off('room:updated', cb); };
 
+export const onRoomTentativeTime = (cb) => { socket?.on('room:tentative-time', cb); };
+export const offRoomTentativeTime = (cb) => { socket?.off('room:tentative-time', cb); };
+
 // ── Late Join notification events ─────────────────────────────────────────────
 export const onLateJoinRequest = (cb) => { socket?.on('candidate:lateJoinRequest', cb); };
 export const offLateJoinRequest = (cb) => { socket?.off('candidate:lateJoinRequest', cb); };

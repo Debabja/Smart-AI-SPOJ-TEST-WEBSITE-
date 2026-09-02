@@ -85,7 +85,33 @@ const createRoom = async (req, res, next) => {
 const getRooms = async (req, res, next) => {
   try {
     const rooms = await Room.find({ testId: req.params.testId });
-    res.json({ rooms });
+    const now = Date.now();
+    const activeSubmissions = await Submission.find({
+      testId: req.params.testId,
+      status: 'IN_PROGRESS',
+      candidateEndTime: { $gt: new Date(now) },
+    }, { roomId: 1, candidateEndTime: 1 });
+
+    const maxRemByRoom = {};
+    for (const s of activeSubmissions) {
+      if (s.roomId && s.candidateEndTime) {
+        const rid = s.roomId.toString();
+        const rem = Math.max(0, new Date(s.candidateEndTime).getTime() - now);
+        if (!maxRemByRoom[rid] || rem > maxRemByRoom[rid]) {
+          maxRemByRoom[rid] = rem;
+        }
+      }
+    }
+
+    const enrichedRooms = rooms.map((r) => {
+      const rObj = r.toObject();
+      // BUG-21: Tentative Time = MAX remaining time among candidates currently IN_PROGRESS
+      // ASSUMPTION: If no in-progress candidate in room, tentativeTime is null ("—" or "Not started" placeholder)
+      rObj.tentativeTime = maxRemByRoom[r._id.toString()] || null;
+      return rObj;
+    });
+
+    res.json({ rooms: enrichedRooms });
   } catch (err) {
     next(err);
   }
@@ -331,7 +357,33 @@ const getLiveCandidates = async (req, res, next) => {
       }
     }
 
-    res.json({ candidates: candidateMap });
+    // BUG-21: Tentative Time = MAX remaining time (candidateEndTime - now) among candidates currently IN_PROGRESS
+    const tentativeTimeByRoom = {};
+    let overallTentativeTime = 0;
+    let hasAnyInProgress = false;
+
+    for (const c of Object.values(candidateMap)) {
+      if (c.status === 'IN_PROGRESS' && c.candidateEndTime) {
+        const rem = Math.max(0, new Date(c.candidateEndTime).getTime() - now);
+        if (rem > 0) {
+          hasAnyInProgress = true;
+          if (rem > overallTentativeTime) {
+            overallTentativeTime = rem;
+          }
+          const rid = c.roomId ? c.roomId.toString() : 'UNASSIGNED';
+          if (!tentativeTimeByRoom[rid] || rem > tentativeTimeByRoom[rid]) {
+            tentativeTimeByRoom[rid] = rem;
+          }
+        }
+      }
+    }
+
+    // ASSUMPTION: If no candidates are currently in progress, tentativeTime is null ("—" or "Not started" placeholder)
+    res.json({
+      candidates: candidateMap,
+      tentativeTime: hasAnyInProgress ? overallTentativeTime : null,
+      tentativeTimeByRoom,
+    });
   } catch (err) {
     next(err);
   }
