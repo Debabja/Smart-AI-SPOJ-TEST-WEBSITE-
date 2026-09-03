@@ -68,10 +68,40 @@ const getTest = async (req, res, next) => {
     const { checkAndAutoEndTest } = require('../services/testLifecycleService');
     await checkAndAutoEndTest(req.params.testId, req.app.get('io'));
 
-    const test = await Test.findById(req.params.testId)
+    let test = await Test.findById(req.params.testId)
       .populate('createdBy', 'name email')
       .populate('questionSetId', 'name testType questionIds');
     if (!test) return res.status(404).json({ error: 'Test not found' });
+
+    // Backfill lifecycle timestamps for older tests that transitioned before these fields were added
+    let needsSave = false;
+    if ((test.status === 'LIVE' || test.status === 'ENDED') && !test.liveStartedAt) {
+      // ASSUMPTION: If liveStartedAt is missing on a LIVE/ENDED test, derive from earliest room or createdAt
+      const earliestRoom = await Room.findOne({ testId: test._id }).sort({ createdAt: 1 });
+      if (earliestRoom) {
+        if (earliestRoom.passwordValidUntil) {
+          test.liveStartedAt = new Date(
+            new Date(earliestRoom.passwordValidUntil).getTime() - (test.startTestWindowMinutes || 10) * 60 * 1000
+          );
+        } else {
+          test.liveStartedAt = earliestRoom.createdAt;
+        }
+      } else {
+        test.liveStartedAt = test.createdAt;
+      }
+      needsSave = true;
+    }
+
+    if (test.status === 'ENDED' && !test.endedAt) {
+      // ASSUMPTION: If endedAt is missing on an ENDED test, derive from updatedAt
+      test.endedAt = test.updatedAt || new Date();
+      needsSave = true;
+    }
+
+    if (needsSave) {
+      await test.save();
+    }
+
     res.json({ test });
   } catch (err) {
     next(err);
@@ -170,15 +200,17 @@ const deleteTest = async (req, res, next) => {
 // Sets status to LIVE (Section 9.2, §12.1 flow)
 const startTest = async (req, res, next) => {
   try {
-    const test = await Test.findByIdAndUpdate(
-      req.params.testId,
-      { status: 'LIVE' },
-      { new: true }
-    );
-    if (!test) return res.status(404).json({ error: 'Test not found' });
+    const now = new Date();
+    const existing = await Test.findById(req.params.testId);
+    if (!existing) return res.status(404).json({ error: 'Test not found' });
+
+    const updates = { status: 'LIVE' };
+    if (!existing.liveStartedAt) {
+      updates.liveStartedAt = now;
+    }
+    const test = await Test.findByIdAndUpdate(req.params.testId, updates, { new: true });
 
     // Set / refresh passwordValidUntil = now + Test.startTestWindowMinutes for all rooms under this test
-    const now = new Date();
     const passwordValidUntil = new Date(
       now.getTime() + (test.startTestWindowMinutes || 10) * 60 * 1000
     );

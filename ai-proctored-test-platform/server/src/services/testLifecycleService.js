@@ -17,11 +17,32 @@ const evaluationService = require('./evaluationService');
  */
 const performEndTest = async (testId, io, reason = 'MANUAL') => {
   try {
-    const test = await Test.findByIdAndUpdate(
-      testId,
-      { status: 'ENDED' },
-      { new: true }
-    );
+    const now = new Date();
+    const existing = await Test.findById(testId);
+    if (!existing) return null;
+
+    const updates = { status: 'ENDED' };
+    if (!existing.endedAt) {
+      updates.endedAt = now;
+    }
+    // If liveStartedAt was not previously recorded, derive from earliest room or creation
+    if (!existing.liveStartedAt) {
+      // ASSUMPTION: If liveStartedAt was not recorded when test went LIVE, derive from the earliest room's start window or createdAt
+      const earliestRoom = await Room.findOne({ testId: existing._id }).sort({ createdAt: 1 });
+      if (earliestRoom) {
+        if (earliestRoom.passwordValidUntil) {
+          updates.liveStartedAt = new Date(
+            new Date(earliestRoom.passwordValidUntil).getTime() - (existing.startTestWindowMinutes || 10) * 60 * 1000
+          );
+        } else {
+          updates.liveStartedAt = earliestRoom.createdAt;
+        }
+      } else {
+        updates.liveStartedAt = existing.createdAt;
+      }
+    }
+
+    const test = await Test.findByIdAndUpdate(testId, updates, { new: true });
     if (!test) return null;
 
     // Transition all active rooms for this test to CLOSED

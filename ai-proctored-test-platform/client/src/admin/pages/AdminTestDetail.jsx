@@ -17,6 +17,93 @@ import {
   offRoomUpdated,
 } from '../../services/socketClient';
 
+// Helper: format date and time (e.g. "3/9/2026 at 10:46 AM")
+const formatDateTime = (dateStr) => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return '';
+  const datePart = d.toLocaleDateString();
+  const timePart = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${datePart} at ${timePart}`;
+};
+
+// Helper: calculate and format live duration (e.g. "1h 23m" or "45m")
+const formatLiveDuration = (startDateStr, endDateStr) => {
+  if (!startDateStr || !endDateStr) return null;
+  const start = new Date(startDateStr);
+  const end = new Date(endDateStr);
+  const diffMs = end - start;
+  if (diffMs <= 0 || isNaN(diffMs)) return null;
+  const totalMinutes = Math.floor(diffMs / (1000 * 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h`;
+  if (minutes > 0) return `${minutes}m`;
+  return '< 1m';
+};
+
+// BUG-35: Date-deduplication helpers for Live session header line
+const isSameCalendarDay = (d1, d2) => {
+  if (!d1 || !d2) return false;
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+};
+
+const formatTimeOnly = (dateObj) => {
+  return dateObj.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+};
+
+const formatDateOnly = (dateObj) => {
+  return dateObj.toLocaleDateString();
+};
+
+const getLiveSessionText = (test) => {
+  if (!test?.liveStartedAt) return null;
+
+  const startDate = new Date(test.liveStartedAt);
+  const createdDate = new Date(test.createdAt);
+  const isLive = test.status === 'LIVE';
+  const isEnded = test.status === 'ENDED';
+
+  if (!isLive && !isEnded) return null;
+
+  if (isEnded) {
+    if (!test.endedAt) return null;
+    const endDate = new Date(test.endedAt);
+
+    const sameDayLive = isSameCalendarDay(startDate, endDate);
+    const sameDayCreated = isSameCalendarDay(startDate, createdDate);
+
+    if (sameDayLive) {
+      if (sameDayCreated) {
+        // RULE A: Live session started and ended on same calendar day, AND same as created date
+        return `Live: ${formatTimeOnly(startDate)} – ${formatTimeOnly(endDate)}`;
+      } else {
+        // RULE B: Live session started and ended on same calendar day, but DIFFERENT from created date
+        return `Live: ${formatDateOnly(startDate)} | ${formatTimeOnly(startDate)} – ${formatTimeOnly(endDate)}`;
+      }
+    } else {
+      // RULE C: Live session spans midnight / different calendar days
+      return `Live: ${formatDateOnly(startDate)} | ${formatTimeOnly(startDate)} – ${formatDateOnly(endDate)} | ${formatTimeOnly(endDate)}`;
+    }
+  }
+
+  if (isLive) {
+    const sameDayCreated = isSameCalendarDay(startDate, createdDate);
+    if (sameDayCreated) {
+      return `Live: ${formatTimeOnly(startDate)} – now`;
+    } else {
+      return `Live: ${formatDateOnly(startDate)} | ${formatTimeOnly(startDate)} – now`;
+    }
+  }
+
+  return null;
+};
+
 export default function AdminTestDetail() {
   const { testId } = useParams();
   const navigate = useNavigate();
@@ -318,10 +405,34 @@ export default function AdminTestDetail() {
                   {test.testType}
                 </span>
               </div>
-              <p style={{ color: '#6b7280', fontSize: '0.875rem' }}>
-                Created by <strong>{test.createdBy?.name || 'Admin'}</strong> on{' '}
-                {new Date(test.createdAt).toLocaleDateString()}
-              </p>
+              <div style={{ color: '#6b7280', fontSize: '0.875rem', marginTop: 4, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div>
+                  Created by <strong>{test.createdBy?.name || 'Admin'}</strong> on{' '}
+                  {new Date(test.createdAt).toLocaleDateString()}
+                </div>
+
+                {(test.status === 'LIVE' || test.status === 'ENDED') && getLiveSessionText(test) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span>{getLiveSessionText(test)}</span>
+
+                    {test.status === 'ENDED' && formatLiveDuration(test.liveStartedAt, test.endedAt) && (
+                      <span
+                        className="badge"
+                        style={{
+                          background: '#f1f5f9',
+                          color: '#475569',
+                          border: '1px solid #e2e8f0',
+                          fontSize: '0.75rem',
+                          padding: '2px 8px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        ⏱️ Live for {formatLiveDuration(test.liveStartedAt, test.endedAt)}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Status Control Actions */}

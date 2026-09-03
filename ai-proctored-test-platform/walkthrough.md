@@ -237,3 +237,96 @@ Executed automated test suite `test_bug34_fullscreen_refresh_bypass.js`:
 - Timer independence and autosaved draft restoration verified: **PASS**
 - Regression audit (BUG-13, BUG-29, BUG-31, BUG-33) verified: **PASS**
 - Summary: **18 / 18 tests passed (100%)**. Client build succeeded in **1.90s** with **0 errors**.
+
+---
+
+## 9. FEATURE: Actual Test Start and End Timestamps on Test Detail Page
+
+### Feature Overview
+Enhanced the Test detail page header ([`AdminTestDetail.jsx`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/client/src/admin/pages/AdminTestDetail.jsx)) to display the actual timestamps for when a test started and ended, as well as its total live duration.
+
+### Key Implementations
+1. **Backend Schema Updates**:
+   - Added additive lifecycle timestamps `liveStartedAt: { type: Date, default: null }` and `endedAt: { type: Date, default: null }` to [`Test.js`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/server/src/models/Test.js).
+2. **Transition Tracking**:
+   - **Start Test** (`startTest` in [`testController.js`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/server/src/controllers/testController.js)): Records `liveStartedAt: now` upon transitioning to `LIVE`.
+   - **End Test** (`performEndTest` in [`testLifecycleService.js`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/server/src/services/testLifecycleService.js)): Records `endedAt: now` upon transitioning to `ENDED`.
+   - **Legacy Fallback / Backfill**: In `getTest`, if an older `LIVE` or `ENDED` test is loaded without recorded timestamps, `liveStartedAt` is backfilled from the earliest room's start window, and `endedAt` from `updatedAt`.
+   - `// ASSUMPTION: If liveStartedAt was not recorded when test went LIVE, derive from the earliest room's start window or createdAt.`
+3. **Frontend Header Display**:
+   - **LIVE Tests**: Displays `Started: [date] at [time]`.
+   - **ENDED Tests**: Displays `Started: [date] at [time] • Ended: [date] at [time]` and convenience badge `⏱️ Live for [Xh Ym]`.
+   - **DRAFT / SCHEDULED Tests**: Only displays the existing `Created by [name] on [date]`.
+   - Styled consistently with muted gray text (`#6b7280`, `0.875rem`) below the test title and badges.
+
+### QA Verification Results
+Executed automated test suite `test_test_lifecycle_timestamps.js`:
+- Schema fields `liveStartedAt` and `endedAt` verified: **PASS**
+- `startTest` records `liveStartedAt` verified: **PASS**
+- `performEndTest` records `endedAt` verified: **PASS**
+- `getTest` fallback backfill for legacy tests verified: **PASS**
+- Frontend date/time formatting and duration calculation verified: **PASS**
+- Conditional visibility across `DRAFT`, `LIVE`, and `ENDED` verified: **PASS**
+- Zero regressions to badges, action buttons, or created by lines: **PASS**
+- Summary: **21 / 21 tests passed (100%)**. Production build succeeded in **1.87s** with **0 errors**.
+
+---
+
+## 10. BUG-35: Redundant Duplicate Date Deduplication on Test Detail Header
+
+### Problem
+On the Test detail header, displaying creation date, start date, and end date separately caused visual clutter when all events occurred on the same day (e.g. `Created by BIG BOSS on 3/9/2026` followed by `Started: 3/9/2026 at 12:27 pm · Ended: 3/9/2026 at 12:37 pm`).
+
+### Solution
+Replaced the separate `Started: ... · Ended: ...` text line with a date-deduplicated `Live: ...` line following the three required rules:
+- **RULE A** (Same day for start, end, and creation): Omits date on Live line entirely.
+  `Line 1: Created by BIG BOSS on 3/9/2026`
+  `Line 2: Live: 12:27 pm – 12:37 pm (10m)`
+- **RULE B** (Live session same day, but different from creation): Displays the live date once.
+  `Line 1: Created by BIG BOSS on 1/9/2026`
+  `Line 2: Live: 3/9/2026, 12:27 pm – 12:37 pm (10m)`
+- **RULE C** (Live session spans midnight across different calendar days): Displays both dates explicitly.
+  `Line 2: Live: 3/9/2026 11:50 pm – 4/9/2026 12:10 am (20m)`
+- **In-Progress LIVE Tests**: Shows `Live: [start time] – now` (or `Live: [date], [start time] – now` if started on a previous day).
+- **DRAFT / SCHEDULED Tests**: Only shows `Created by [admin] on [date]`, no Live line.
+- **Duration Calculation**: Directly reuses `formatLiveDuration` to append duration suffix `(Xm)` or `(Xh Ym)`.
+- **Preserved Elements**: The separate `⏱️ Live for ...` pill badge remains completely untouched with its exact formatting and position.
+
+### QA Verification Results
+Executed automated test suite `test_bug35_date_deduplication.js`:
+- Rule A date deduplication verified: **PASS**
+- Rule B date inclusion verified: **PASS**
+- Rule C midnight spanning verified: **PASS**
+- LIVE test in-progress phrasing verified: **PASS**
+- DRAFT tests omission verified: **PASS**
+- Duration reuse verified: **PASS**
+- Separate pill badge preserved: **PASS**
+- Zero regressions to badges and action buttons: **PASS**
+- Summary: **15 / 15 tests passed (100%)**. Client build succeeded in **1.79s** with **0 errors**.
+
+---
+
+## 11. BUG-37: Duration Deduplication and Pipe "|" Separator on Live Header Line
+
+### Problem
+On the Test detail header, the duration was being rendered twice (both inline as `(15h 28m)` and in the separate `⏱ LIVE FOR 15H 28M` pill badge). Additionally, within multi-part timestamps like `2/9/2026 7:12 pm`, the date and time ran together without visual separation.
+
+### Solution
+1. **Removed Inline Duration**: Completely eliminated the parenthetical `(${duration})` suffix from `getLiveSessionText`. The duration is now rendered exclusively in the `⏱️ Live for ...` pill badge.
+2. **Added Pipe `|` Separator**:
+   - **Rule A** (same day as created, dates omitted): `Live: 12:27 pm – 12:37 pm` (no pipe needed).
+   - **Rule B** (same day live, different from creation date): `Live: 3/9/2026 | 12:27 pm – 12:37 pm`.
+   - **Rule C** (session spans multiple days): `Live: 2/9/2026 | 7:12 pm – 3/9/2026 | 10:41 am`.
+   - **Live In-Progress**: `Live: 12:27 pm – now` (same day) or `Live: 3/9/2026 | 12:27 pm – now` (different day).
+3. **Pill Badge**: Left completely untouched in its original format, styling, and position.
+
+### QA Verification Results
+Executed automated test suite `test_bug37_separator_and_duration_dedup.js`:
+- Zero parenthetical duration in Live line verified: **PASS**
+- Rule B date and time pipe separation verified: **PASS**
+- Rule C two-date pipe separation verified: **PASS**
+- Rule A date omission without stray pipe verified: **PASS**
+- Live in-progress pipe separation verified: **PASS**
+- Separate pill badge preserved as single source of truth for duration: **PASS**
+- Zero regressions to badges, created by line, or action buttons: **PASS**
+- Summary: **16 / 16 tests passed (100%)**. Client build succeeded in **1.81s** with **0 errors**.

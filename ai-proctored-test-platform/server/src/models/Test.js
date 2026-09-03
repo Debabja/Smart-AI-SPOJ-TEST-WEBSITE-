@@ -29,6 +29,9 @@ const testSchema = new mongoose.Schema(
       enum: ['DRAFT', 'SCHEDULED', 'LIVE', 'ENDED'],
       default: 'DRAFT',
     },
+    // Lifecycle timestamps
+    liveStartedAt: { type: Date, default: null },
+    endedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
