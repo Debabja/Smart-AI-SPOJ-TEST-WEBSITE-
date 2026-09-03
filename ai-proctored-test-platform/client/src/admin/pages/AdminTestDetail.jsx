@@ -17,6 +17,15 @@ import {
   offRoomUpdated,
 } from '../../services/socketClient';
 
+const TEST_TYPES = [
+  { value: 'SPOJ', label: 'SPOJ (DSA / Competitive Coding)' },
+  { value: 'JAVASCRIPT', label: 'JavaScript' },
+  { value: 'REACT', label: 'React.js' },
+  { value: 'AI_TEST', label: 'AI Test (Kimi Assisted)' },
+];
+
+const PROGRAMMING_LANGUAGES = ['python', 'java', 'cpp', 'c', 'javascript', 'react'];
+
 // Helper: format date and time (e.g. "3/9/2026 at 10:46 AM")
 const formatDateTime = (dateStr) => {
   if (!dateStr) return '';
@@ -136,13 +145,29 @@ export default function AdminTestDetail() {
   const [selectedRoomCandidates, setSelectedRoomCandidates] = useState(null);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
 
+  // Edit Configuration Modal State (BUG-36, BUG-38)
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingConfig, setEditingConfig] = useState(false);
+  const [questionSets, setQuestionSets] = useState([]);
+  const [editFormData, setEditFormData] = useState({
+    title: '',
+    testType: 'SPOJ',
+    questionSetId: '',
+    durationMinutes: 90,
+    totalQuestions: 5,
+    startTestWindowMinutes: 10,
+    supportedLanguages: ['python', 'java', 'cpp', 'javascript'],
+    instructions: '',
+  });
+
   // Fetch Test Details & Rooms
   const fetchTestAndRooms = useCallback(async () => {
     try {
       setLoading(true);
-      const [testRes, roomsRes] = await Promise.all([
+      const [testRes, roomsRes, qsRes] = await Promise.all([
         api.getTest(testId),
         api.getRooms(testId),
+        api.getQuestionSets().catch(() => ({ data: { questionSets: [] } })),
       ]);
       const fetchedTest = testRes.data.test;
       setTest(fetchedTest);
@@ -154,6 +179,7 @@ export default function AdminTestDetail() {
           : ''
       );
       setRooms(roomsRes.data.rooms || []);
+      setQuestionSets(qsRes.data?.questionSets || []);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to load test details');
     } finally {
@@ -318,6 +344,105 @@ export default function AdminTestDetail() {
       setRooms(roomsRes.data.rooms || []);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to close room');
+    }
+  };
+
+  // ── BUG-36, BUG-38, BUG-39: Edit Configuration Handlers ───────────────────
+  const handleOpenEditModal = async () => {
+    if (test?.status !== 'DRAFT') return;
+    const qsId = test?.questionSetId?._id || test?.questionSetId || '';
+    setEditFormData({
+      title: test?.title || '',
+      testType: test?.testType || 'SPOJ',
+      questionSetId: qsId,
+      durationMinutes: test?.durationMinutes ?? 90,
+      totalQuestions: test?.totalQuestions ?? 5,
+      startTestWindowMinutes: test?.startTestWindowMinutes ?? 10,
+      supportedLanguages: Array.isArray(test?.supportedLanguages) && test.supportedLanguages.length > 0
+        ? [...test.supportedLanguages]
+        : ['python', 'java', 'cpp', 'javascript'],
+      instructions: test?.instructions || '',
+    });
+    setShowEditModal(true);
+    if (questionSets.length === 0) {
+      try {
+        const res = await api.getQuestionSets();
+        setQuestionSets(res.data?.questionSets || []);
+      } catch (err) {
+        console.error('Failed to load question sets:', err);
+      }
+    }
+  };
+
+  const handleEditTestTypeChange = (e) => {
+    if (test?.status !== 'DRAFT') return;
+    const newType = e.target.value;
+    setEditFormData((prev) => ({
+      ...prev,
+      testType: newType,
+      questionSetId: '', // Reset question set because old set is not valid for new testType
+    }));
+  };
+
+  const handleEditLanguageToggle = (lang) => {
+    if (test?.status !== 'DRAFT') return;
+    setEditFormData((prev) => {
+      const exists = prev.supportedLanguages.includes(lang);
+      const updated = exists
+        ? prev.supportedLanguages.filter((l) => l !== lang)
+        : [...prev.supportedLanguages, lang];
+      return { ...prev, supportedLanguages: updated };
+    });
+  };
+
+  const handleSaveConfig = async (e) => {
+    e.preventDefault();
+    if (test?.status !== 'DRAFT') {
+      return toast.error('Editing is only allowed while the test is in DRAFT status');
+    }
+    if (!editFormData.title.trim()) {
+      return toast.error('Test title is required');
+    }
+    if (!editFormData.questionSetId) {
+      return toast.error('Please select a Question Set');
+    }
+    if (!editFormData.durationMinutes || Number(editFormData.durationMinutes) <= 0) {
+      return toast.error('Duration must be greater than 0');
+    }
+    if (editFormData.totalQuestions && Number(editFormData.totalQuestions) <= 0) {
+      return toast.error('Total questions must be greater than 0');
+    }
+    if (!editFormData.startTestWindowMinutes || Number(editFormData.startTestWindowMinutes) <= 0) {
+      return toast.error('Join window must be greater than 0');
+    }
+    if (!editFormData.supportedLanguages || editFormData.supportedLanguages.length === 0) {
+      return toast.error('Please select at least one supported language');
+    }
+    if (!editFormData.instructions.trim()) {
+      return toast.error('Candidate instructions are required');
+    }
+
+    try {
+      setEditingConfig(true);
+      const payload = {
+        title: editFormData.title.trim(),
+        testType: editFormData.testType,
+        questionSetId: editFormData.questionSetId,
+        durationMinutes: Number(editFormData.durationMinutes),
+        totalQuestions: editFormData.totalQuestions ? Number(editFormData.totalQuestions) : 5,
+        startTestWindowMinutes: Number(editFormData.startTestWindowMinutes),
+        supportedLanguages: editFormData.supportedLanguages,
+        instructions: editFormData.instructions.trim(),
+      };
+
+      const res = await api.updateTest(testId, payload);
+      setTest(res.data.test);
+      toast.success('Test configuration updated successfully');
+      setShowEditModal(false);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update test configuration');
+    } finally {
+      setEditingConfig(false);
     }
   };
 
@@ -588,8 +713,27 @@ export default function AdminTestDetail() {
 
             {/* Test Configuration Summary */}
             <div className="card">
-              <div className="card-header">
+              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3 className="card-title">Configuration Details</h3>
+                {test?.status === 'DRAFT' && (
+                  <button
+                    type="button"
+                    id="edit-config-btn"
+                    onClick={handleOpenEditModal}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '4px 12px',
+                      fontSize: '0.8rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      borderColor: '#cbd5e1',
+                      fontWeight: 600,
+                    }}
+                  >
+                    ✏️ Edit
+                  </button>
+                )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: '0.875rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 8 }}>
@@ -1105,6 +1249,211 @@ export default function AdminTestDetail() {
                   Close
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Edit Configuration Modal (BUG-36, BUG-38, BUG-39) ── */}
+        {showEditModal && (
+          <div className="modal-backdrop" onClick={() => !editingConfig && setShowEditModal(false)}>
+            <div
+              className="modal-container"
+              style={{ maxWidth: 650, maxHeight: '90vh', overflowY: 'auto' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="modal-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <h3 className="modal-title">Edit Test Configuration</h3>
+                  <span className="badge badge-secondary" style={{ fontSize: '0.75rem' }}>DRAFT</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
+                  style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer' }}
+                  disabled={editingConfig}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveConfig}>
+                <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  {/* Test Title / Name */}
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontWeight: 600 }}>Test Title *</label>
+                    <input
+                      type="text"
+                      id="edit-test-title"
+                      className="form-control"
+                      placeholder="e.g. SDE-1 Hiring Drive Round 1"
+                      value={editFormData.title}
+                      onChange={(e) => setEditFormData((p) => ({ ...p, title: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  {/* Row 2: Test Type & Question Set (2-column grid matching Create modal) */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                    <div className="form-group">
+                      <label className="form-label" style={{ fontWeight: 600 }}>Test Type *</label>
+                      <select
+                        id="edit-test-type"
+                        className="form-select"
+                        value={editFormData.testType}
+                        onChange={handleEditTestTypeChange}
+                        required
+                      >
+                        {TEST_TYPES.map((t) => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" style={{ fontWeight: 600 }}>Question Set *</label>
+                      <select
+                        id="edit-question-set"
+                        className="form-select"
+                        value={editFormData.questionSetId}
+                        onChange={(e) => setEditFormData((p) => ({ ...p, questionSetId: e.target.value }))}
+                        required
+                      >
+                        <option value="">Select a Question Set...</option>
+                        {(() => {
+                          const filtered = questionSets.filter((qs) => qs.testType === editFormData.testType);
+                          const cur = test?.questionSetId && typeof test.questionSetId === 'object' ? test.questionSetId : null;
+                          const displayList = cur && cur.testType === editFormData.testType && !filtered.some((qs) => qs._id === cur._id)
+                            ? [cur, ...filtered]
+                            : filtered;
+                          return displayList.map((qs) => (
+                            <option key={qs._id} value={qs._id}>
+                              {qs.name} ({qs.testType})
+                            </option>
+                          ));
+                        })()}
+                      </select>
+                      {questionSets.filter((qs) => qs.testType === editFormData.testType).length === 0 && (
+                        <p style={{ fontSize: '0.75rem', color: '#E74C3C', marginTop: 4 }}>
+                          No question sets found for {editFormData.testType}. Create one in Question Bank first.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Row 3: Duration (Minutes) * & Total Questions (2-column grid matching Create modal) */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                    <div className="form-group">
+                      <label className="form-label" style={{ fontWeight: 600 }}>Duration (Minutes) *</label>
+                      <input
+                        type="number"
+                        id="edit-duration-minutes"
+                        className="form-control"
+                        min="5"
+                        max="360"
+                        value={editFormData.durationMinutes}
+                        onChange={(e) => setEditFormData((p) => ({ ...p, durationMinutes: e.target.value }))}
+                        required
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" style={{ fontWeight: 600 }}>Total Questions</label>
+                      <input
+                        type="number"
+                        id="edit-total-questions"
+                        className="form-control"
+                        min="1"
+                        max="50"
+                        value={editFormData.totalQuestions}
+                        onChange={(e) => setEditFormData((p) => ({ ...p, totalQuestions: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Row 4: Join Window / Password Validity (Minutes) with helper subtext */}
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontWeight: 600 }}>Join Window / Password Validity (Minutes)</label>
+                    <input
+                      type="number"
+                      id="edit-start-window"
+                      className="form-control"
+                      min="1"
+                      max="120"
+                      value={editFormData.startTestWindowMinutes}
+                      onChange={(e) => setEditFormData((p) => ({ ...p, startTestWindowMinutes: e.target.value }))}
+                      required
+                    />
+                    <small style={{ color: '#6b7280', fontSize: '0.75rem', marginTop: 4, display: 'block' }}>
+                      Room passwords expire after this window from room creation (FR-3.3).
+                    </small>
+                  </div>
+
+                  {/* Row 5: Supported Languages */}
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontWeight: 600, marginBottom: 0 }}>Supported Languages</label>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
+                      {PROGRAMMING_LANGUAGES.map((lang) => {
+                        const isChecked = editFormData.supportedLanguages?.includes(lang);
+                        return (
+                          <label
+                            key={lang}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              fontSize: '0.85rem',
+                              cursor: 'pointer',
+                              padding: '5px 12px',
+                              borderRadius: 6,
+                              border: isChecked ? '1.5px solid #0E7C86' : '1.5px solid #e5e7eb',
+                              background: isChecked ? 'rgba(14, 124, 134, 0.08)' : 'white',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => handleEditLanguageToggle(lang)}
+                            />
+                            {lang.toUpperCase()}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Row 6: Candidate Instructions */}
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontWeight: 600 }}>Candidate Instructions *</label>
+                    <textarea
+                      id="edit-instructions"
+                      className="form-control"
+                      rows={5}
+                      value={editFormData.instructions}
+                      onChange={(e) => setEditFormData((p) => ({ ...p, instructions: e.target.value }))}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="modal-footer">
+                  <button
+                    type="button"
+                    onClick={() => setShowEditModal(false)}
+                    className="btn btn-secondary"
+                    disabled={editingConfig}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    id="save-config-btn"
+                    className="btn btn-primary"
+                    disabled={editingConfig}
+                  >
+                    {editingConfig ? 'Saving Changes...' : 'Save Configuration'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

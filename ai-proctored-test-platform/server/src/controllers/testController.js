@@ -111,14 +111,50 @@ const getTest = async (req, res, next) => {
 // ── PATCH /tests/:testId ──────────────────────────────────────────────────────
 const updateTest = async (req, res, next) => {
   try {
-    // Disallow direct status manipulation via this generic PATCH
-    const disallowed = ['status', 'createdBy', '_id'];
+    const existing = await Test.findById(req.params.testId);
+    if (!existing) return res.status(404).json({ error: 'Test not found' });
+
+    // BUG-39: Editing is strictly DRAFT-only. Disallow updates once LIVE or ENDED.
+    if (existing.status !== 'DRAFT') {
+      return res.status(403).json({
+        error: `Test configuration can only be edited while in DRAFT status. Current status: ${existing.status}.`,
+      });
+    }
+
+    // Disallow direct status/system field manipulation via this generic PATCH
+    const disallowed = ['status', 'createdBy', '_id', 'liveStartedAt', 'endedAt'];
     disallowed.forEach((k) => delete req.body[k]);
+
+    // Input validations
+    if (req.body.title !== undefined && !req.body.title.trim()) {
+      return res.status(400).json({ error: 'Test title cannot be empty' });
+    }
+    if (req.body.durationMinutes !== undefined && req.body.durationMinutes <= 0) {
+      return res.status(400).json({ error: 'Duration must be greater than 0' });
+    }
+    if (req.body.totalQuestions !== undefined && req.body.totalQuestions <= 0) {
+      return res.status(400).json({ error: 'Total questions must be greater than 0' });
+    }
+    if (req.body.startTestWindowMinutes !== undefined && req.body.startTestWindowMinutes <= 0) {
+      return res.status(400).json({ error: 'Start window must be greater than 0' });
+    }
+    if (
+      req.body.supportedLanguages !== undefined &&
+      (!Array.isArray(req.body.supportedLanguages) || req.body.supportedLanguages.length === 0)
+    ) {
+      return res.status(400).json({ error: 'At least one supported language must be selected' });
+    }
+    if (req.body.instructions !== undefined && !req.body.instructions.trim()) {
+      return res.status(400).json({ error: 'Instructions cannot be empty' });
+    }
 
     const test = await Test.findByIdAndUpdate(req.params.testId, req.body, {
       new: true,
       runValidators: true,
-    });
+    })
+      .populate('createdBy', 'name email')
+      .populate('questionSetId', 'name testType questionIds');
+
     if (!test) return res.status(404).json({ error: 'Test not found' });
     res.json({ test });
   } catch (err) {

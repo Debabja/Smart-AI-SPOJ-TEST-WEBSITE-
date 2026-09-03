@@ -14,7 +14,7 @@ const TEST_TYPES = [
   { value: 'AI_TEST', label: 'AI Test (Kimi Assisted)' },
 ];
 
-const PROGRAMMING_LANGUAGES = ['python', 'java', 'cpp', 'c', 'javascript'];
+const PROGRAMMING_LANGUAGES = ['python', 'java', 'cpp', 'c', 'javascript', 'react'];
 
 export default function AdminTests() {
   const navigate = useNavigate();

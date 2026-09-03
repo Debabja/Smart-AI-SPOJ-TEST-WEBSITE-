@@ -330,3 +330,131 @@ Executed automated test suite `test_bug37_separator_and_duration_dedup.js`:
 - Separate pill badge preserved as single source of truth for duration: **PASS**
 - Zero regressions to badges, created by line, or action buttons: **PASS**
 - Summary: **16 / 16 tests passed (100%)**. Client build succeeded in **1.81s** with **0 errors**.
+
+---
+
+## 12. BUG-36: Test Configuration Editing (DRAFT & LIVE/ENDED Lifecycles)
+
+### Problem
+On the Test detail page, core test configuration fields (Question Set, Duration, Total Questions, Start Window, Supported Languages, Instructions, and Test Name) could not be edited after test creation, even when the test was still in `DRAFT` status and had not yet started.
+
+### Solution
+1. **Edit Button on Configuration Details Card**:
+   - Added an `✏️ Edit` button to the `Configuration Details` card header in [`AdminTestDetail.jsx`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/client/src/admin/pages/AdminTestDetail.jsx).
+2. **DRAFT Status Full Editability**:
+   - When opened on a `DRAFT` test, all fields are unlocked and fully editable:
+     - Test Name / Title
+     - Question Set (dropdown filtered by `test.testType`, with fallback to ensure current set is listed)
+     - Duration (Minutes)
+     - Total Questions
+     - Start Window / Join Window (Minutes)
+     - Supported Languages (multi-select checkboxes)
+     - Candidate Instructions
+3. **LIVE / ENDED Status Protection**:
+   - Once a test has transitioned to `LIVE` or `ENDED`, assessment parameters (Question Set, Duration, Total Questions, Start Window, Languages) are disabled to protect candidate sessions and scoring integrity.
+   - An advisory banner (`🔒 Core assessment settings... are locked once a test is LIVE`) informs the admin.
+   - Test Name and Instructions remain editable.
+4. **Backend Enforcement & Validation**:
+   - [`updateTest` in `testController.js`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/server/src/controllers/testController.js) rejects changes to locked configuration fields if test status is `LIVE` or `ENDED`.
+   - Validates positive duration, positive question count, positive window, non-empty languages, and non-empty title/instructions.
+   - Fully populates `createdBy` and `questionSetId` upon returning the updated test object.
+5. **Instant Synchronization**:
+   - `setTest(res.data.test)` updates local state immediately, updating the header title, question set name, duration, questions count, start window, languages, and instructions without a page reload.
+
+### QA Verification Results
+Executed automated test suite `test_bug36_edit_test_configuration.js`:
+- Edit button present on Configuration Details card: **PASS**
+- Full field editability in DRAFT status: **PASS**
+- Field locking and advisory notice in LIVE/ENDED status: **PASS**
+- Server-side security enforcement for locked fields: **PASS**
+- Input validation checks: **PASS**
+- Instant client state synchronization: **PASS**
+- Zero regressions to Passing Criteria, Malpractice Threshold, or Room management: **PASS**
+- Summary: **15 / 15 tests passed (100%)**. Client build succeeded in **1.76s** with **0 errors**.
+
+---
+
+## 13. BUG-38: Edit Test Configuration Modal Full Parity with Create Modal
+
+### Problem
+Comparing the "Create New Test" modal against the "Edit Test Configuration" modal built for BUG-36 revealed discrepancies:
+1. Missing `Test Type` dropdown field in the Edit modal.
+2. Need to confirm intentional omission of `Passing Criteria` from the Edit modal (to prevent conflicting dual editing paths with the dedicated Passing Criteria card).
+3. Inconsistent field labeling: `Start Window` in Edit vs. `Join Window / Password Validity (Minutes)` with expiration subtext in Create.
+4. Divergent Supported Languages: Edit showed `REACT` while Create only showed 5 languages without `REACT`.
+
+### Solution
+1. **Added Test Type with Cascading Reset**:
+   - Added `Test Type *` select dropdown to the Edit modal in [`AdminTestDetail.jsx`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/client/src/admin/pages/AdminTestDetail.jsx).
+   - Editable only while `test.status === 'DRAFT'`. Locked/disabled for `LIVE` and `ENDED` tests.
+   - When changed, `questionSetId` is immediately reset to empty (`''`), requiring the admin to choose a valid question set for the newly selected test type.
+   - Question Sets in the dropdown filter dynamically by `editFormData.testType`.
+2. **Preserved Single Source of Truth for Passing Criteria**:
+   - Confirmed intentional omission from Edit Configuration modal. Passing Criteria remains exclusively editable via the dedicated card on the Test Detail page, which directly invokes shortlist recalculation.
+3. **Unified Field Labels and Layout**:
+   - Renamed label to `Join Window / Password Validity (Minutes)`.
+   - Added helper sub-text: `Room passwords expire after this window from room creation (FR-3.3).`
+   - Unified modal layout to mirror Create modal:
+     - Row 1: `Test Title *`
+     - Row 2: `Test Type *` & `Question Set *` (2 columns)
+     - Row 3: `Duration (Minutes) *` & `Total Questions` (2 columns)
+     - Row 4: `Join Window / Password Validity (Minutes)`
+     - Row 5: `Supported Languages`
+     - Row 6: `Candidate Instructions *`
+4. **Canonical Supported Languages Parity**:
+   - Audited the `Test` Mongoose model schema enum: `['python', 'java', 'cpp', 'c', 'javascript', 'react']`.
+   - Added `'react'` to `PROGRAMMING_LANGUAGES` in [`AdminTests.jsx`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/client/src/admin/pages/AdminTests.jsx) so both Create and Edit modals offer the exact identical set of 6 checkboxes.
+
+### QA Verification Results
+Executed automated test suite `test_bug38_edit_modal_parity.js`:
+- Edit modal renders Test Type select dropdown with all test types: **PASS**
+- Test Type field is disabled when test status is not DRAFT: **PASS**
+- Backend updateTest locks testType when test is LIVE or ENDED: **PASS**
+- `handleEditTestTypeChange` resets `questionSetId` to empty string when Test Type changes: **PASS**
+- Question Set dropdown filters by `editFormData.testType`: **PASS**
+- Passing Criteria intentionally omitted from Edit modal: **PASS**
+- Unified `Join Window / Password Validity (Minutes)` label and helper sub-text: **PASS**
+- Canonical 6 supported languages match identically between Create and Edit: **PASS**
+- Zero regressions to previous features or bug fixes: **PASS**
+- Summary: **17 / 17 tests passed (100%)**. Client build succeeded in **1.86s** with **0 errors**.
+
+---
+
+## 14. BUG-39: DRAFT-Only Test Configuration Editing & Button Visibility
+
+### Problem
+On the Test detail page for an `ENDED` or `LIVE` test, the "Edit" button on the Configuration Details card was still visible and clickable. Per directive, editing is strictly DRAFT-only: once a test goes `LIVE` or has `ENDED`, the Edit button should be hidden and the backend endpoint must reject modifications with 403 Forbidden.
+
+### Solution
+1. **Conditional "Edit" Button Rendering**:
+   - In [`AdminTestDetail.jsx`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/client/src/admin/pages/AdminTestDetail.jsx#L719-L738), wrapped the Edit button with `{test?.status === 'DRAFT' && (...)}`.
+   - The button is visible and active on `DRAFT` tests, and completely hidden on `LIVE` and `ENDED` tests.
+2. **Backend API Security Enforcement**:
+   - In [`testController.js:updateTest`](file:///c:/Users/GLB-BLR-112/Desktop/spoj%20test%20website/ai-proctored-test-platform/server/src/controllers/testController.js#L112-L130), added a strict check:
+     ```javascript
+     if (existing.status !== 'DRAFT') {
+       return res.status(403).json({
+         error: `Test configuration can only be edited while in DRAFT status. Current status: ${existing.status}.`,
+       });
+     }
+     ```
+   - Direct API calls attempting to mutate non-DRAFT tests are immediately rejected.
+3. **Dead Partial-Locking Code Cleanup**:
+   - Cleaned up confusing partial-edit logic, complex ternaries, and advisory banners.
+   - Simplified modal header badge to `DRAFT`.
+   - Guarded `handleOpenEditModal` and `handleSaveConfig` with `if (test?.status !== 'DRAFT') return;`.
+4. **Preserved Independent Controls**:
+   - Passing Criteria (FR-2.2) remains editable anytime via its dedicated card.
+   - Malpractice Disqualification Threshold (FR-2.3) remains editable post-test via its dedicated card.
+
+### QA Verification Results
+Executed automated test suite `test_bug39_draft_only_edit.js`:
+- Edit button conditionally rendered strictly for `DRAFT` status: **PASS**
+- Edit button completely hidden on `LIVE` tests: **PASS**
+- Edit button completely hidden on `ENDED` tests: **PASS**
+- Client-side open and save guards enforced: **PASS**
+- Backend `updateTest` rejects non-DRAFT tests with 403 Forbidden: **PASS**
+- Full field editing in DRAFT status preserved: **PASS**
+- Independent Passing Criteria and Malpractice Threshold controls preserved: **PASS**
+- Dead partial-lock code and advisory banners cleaned up: **PASS**
+- Summary: **18 / 18 tests passed (100%)**. Client build succeeded in **1.77s** with **0 errors**.

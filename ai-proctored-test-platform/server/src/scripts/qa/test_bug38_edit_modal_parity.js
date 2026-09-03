@@ -1,0 +1,170 @@
+/**
+ * QA Verification Suite for BUG-38:
+ * Edit Test Configuration Modal Parity with Create New Test Modal
+ *
+ * Verifies:
+ * 1. Edit modal includes a Test Type field with TEST_TYPES dropdown options (Criterion 1).
+ * 2. Test Type is editable when test is in DRAFT status, and locked/disabled when LIVE or ENDED (Criterion 1).
+ * 3. Changing Test Type in Edit modal immediately resets questionSetId to '' forcing valid re-selection (Criterion 2).
+ * 4. Question Sets in Edit modal filter dynamically based on the currently selected testType (Criterion 2).
+ * 5. Passing Criteria is intentionally absent from Edit modal, preserving the dedicated card on Test Detail (Criterion 3).
+ * 6. "Join Window / Password Validity (Minutes)" uses unified label and helper sub-text in both modals (Criterion 4).
+ * 7. Both modals offer the identical, canonical set of 6 Supported Language checkboxes matching schema (Criterion 5).
+ * 8. Zero regressions to BUG-36 field editing, validation, or previous bug fixes (Criterion 6).
+ */
+
+const fs = require('fs');
+const path = require('path');
+
+async function runTests() {
+  console.log('========================================================================');
+  console.log('QA VERIFICATION SUITE: BUG-38 Edit Modal Parity with Create Modal');
+  console.log('========================================================================\n');
+
+  let passedTests = 0;
+  let totalTests = 0;
+
+  function assert(condition, message) {
+    totalTests++;
+    if (condition) {
+      console.log(`[PASS] ${message}`);
+      passedTests++;
+    } else {
+      console.error(`[FAIL] ${message}`);
+      process.exitCode = 1;
+    }
+  }
+
+  const testDetailPath = path.join(__dirname, '../../../../client/src/admin/pages/AdminTestDetail.jsx');
+  const adminTestsPath = path.join(__dirname, '../../../../client/src/admin/pages/AdminTests.jsx');
+  const testModelPath = path.join(__dirname, '../../models/Test.js');
+  const testControllerPath = path.join(__dirname, '../../controllers/testController.js');
+
+  const testDetailCode = fs.readFileSync(testDetailPath, 'utf-8');
+  const adminTestsCode = fs.readFileSync(adminTestsPath, 'utf-8');
+  const testModelCode = fs.readFileSync(testModelPath, 'utf-8');
+  const testControllerCode = fs.readFileSync(testControllerPath, 'utf-8');
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // TEST 1: Test Type Field in Edit Modal (Criterion 1)
+  // ──────────────────────────────────────────────────────────────────────────
+  console.log('--- TEST 1: Test Type Field Presence & Lifecycle Locking ---');
+  assert(
+    testDetailCode.includes('id="edit-test-type"') &&
+    testDetailCode.includes('TEST_TYPES.map'),
+    'Edit modal renders Test Type select dropdown with all test types'
+  );
+  assert(
+    testDetailCode.includes("{test?.status === 'DRAFT' && (") &&
+    testDetailCode.includes("if (test?.status !== 'DRAFT') return;"),
+    'Edit modal and Test Type field are accessible strictly when test status is DRAFT (BUG-39)'
+  );
+  assert(
+    testControllerCode.includes("existing.status !== 'DRAFT'") &&
+    testControllerCode.includes('403'),
+    'Backend updateTest rejects non-DRAFT modifications with 403 Forbidden'
+  );
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // TEST 2: Cascading Question Set Reset on Test Type Change (Criterion 2)
+  // ──────────────────────────────────────────────────────────────────────────
+  console.log('\n--- TEST 2: Cascading Question Set Reset on Test Type Change ---');
+  assert(
+    testDetailCode.includes('handleEditTestTypeChange') &&
+    testDetailCode.includes('questionSetId: \'\''),
+    'handleEditTestTypeChange resets questionSetId to empty string when Test Type changes'
+  );
+  assert(
+    testDetailCode.includes('qs.testType === editFormData.testType'),
+    'Question Set dropdown in Edit modal filters by editFormData.testType'
+  );
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // TEST 3: Intentional Passing Criteria Omission (Criterion 3)
+  // ──────────────────────────────────────────────────────────────────────────
+  console.log('\n--- TEST 3: Passing Criteria Single Source of Truth ---');
+  // Check that inside showEditModal, passing criteria is NOT an editable input
+  const editModalPart = testDetailCode.slice(testDetailCode.indexOf('showEditModal &&'));
+  assert(
+    !editModalPart.includes('id="edit-passing-criteria"'),
+    'Passing Criteria is intentionally omitted from Edit modal by design'
+  );
+  assert(
+    testDetailCode.includes('handleUpdatePassingCriteria'),
+    'Passing Criteria remains exclusively managed via its dedicated card on Test Detail'
+  );
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // TEST 4: Label & Helper Text Consistency (Criterion 4)
+  // ──────────────────────────────────────────────────────────────────────────
+  console.log('\n--- TEST 4: Unified Labeling & Helper Sub-Text ---');
+  assert(
+    testDetailCode.includes('Join Window / Password Validity (Minutes)') &&
+    adminTestsCode.includes('Join Window / Password Validity (Minutes)'),
+    'Both Create and Edit modals use "Join Window / Password Validity (Minutes)" label'
+  );
+  assert(
+    testDetailCode.includes('Room passwords expire after this window from room creation (FR-3.3).') &&
+    adminTestsCode.includes('Room passwords expire after this window from room creation (FR-3.3).'),
+    'Both Create and Edit modals include the FR-3.3 room password expiration sub-text'
+  );
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // TEST 5: Supported Languages Canonical Parity (Criterion 5)
+  // ──────────────────────────────────────────────────────────────────────────
+  console.log('\n--- TEST 5: Supported Languages Parity & Schema Match ---');
+  const schemaEnumMatch = testModelCode.includes("'python', 'java', 'cpp', 'c', 'javascript', 'react'");
+  assert(
+    schemaEnumMatch,
+    'Test schema enum includes all 6 canonical languages: python, java, cpp, c, javascript, react'
+  );
+
+  const detailLangs = testDetailCode.match(/const PROGRAMMING_LANGUAGES = \[(.*?)\];/s)?.[1] || '';
+  const adminLangs = adminTestsCode.match(/const PROGRAMMING_LANGUAGES = \[(.*?)\];/s)?.[1] || '';
+
+  const cleanDetail = detailLangs.replace(/\s+/g, '').replace(/'/g, '"');
+  const cleanAdmin = adminLangs.replace(/\s+/g, '').replace(/'/g, '"');
+
+  assert(
+    cleanDetail.includes('react') && cleanAdmin.includes('react'),
+    'Both Create and Edit modals include "react" in PROGRAMMING_LANGUAGES'
+  );
+  assert(
+    cleanDetail === cleanAdmin,
+    `Create and Edit modal languages match identically (${cleanDetail})`
+  );
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // TEST 6: Regression Prevention Audit (Criterion 6)
+  // ──────────────────────────────────────────────────────────────────────────
+  console.log('\n--- TEST 6: Regression Prevention Audit ---');
+  assert(
+    testDetailCode.includes('handleSaveConfig'),
+    'Save configuration handler preserved'
+  );
+  assert(
+    testDetailCode.includes('id="edit-config-btn"'),
+    'Edit button on Configuration Details card preserved'
+  );
+  assert(
+    testDetailCode.includes('getLiveSessionText'),
+    'BUG-35 & BUG-37 Live timestamps header preserved'
+  );
+  assert(
+    testDetailCode.includes('handleStartTest') && testDetailCode.includes('handleEndTest'),
+    'Start and End test lifecycle actions preserved'
+  );
+  assert(
+    testDetailCode.includes('handleAddRoomSubmit') && testDetailCode.includes('handleDeleteRoom'),
+    'Physical room management actions preserved'
+  );
+
+  console.log('\n========================================================================');
+  console.log(`SUMMARY: ${passedTests} / ${totalTests} TESTS PASSED (${Math.round((passedTests / totalTests) * 100)}%)`);
+  console.log('========================================================================');
+}
+
+runTests().catch((err) => {
+  console.error('Fatal test error:', err);
+  process.exit(1);
+});
