@@ -90,7 +90,7 @@ const submitFrame = [
 // Used for client-detected violations: MULTIPLE_FACES, NO_FACE_15MIN, TAB_SWITCH, FULLSCREEN_EXIT
 const reportViolation = async (req, res, next) => {
   try {
-    let { candidateId, testId, roomId, violationType, screenshotBase64 } = req.body;
+    let { candidateId, testId, roomId, violationType, screenshotBase64, detectedAt } = req.body;
 
     if (!candidateId && req.user) {
       candidateId = req.user.id;
@@ -115,13 +115,18 @@ const reportViolation = async (req, res, next) => {
       proofScreenshotUrl = await cloudinaryService.uploadScreenshot(buffer, testId, candidateId);
     }
 
-    const log = await MalpracticeLog.create({
+    const logData = {
       candidateId,
       testId,
       roomId,
       violationType,
       proofScreenshotUrl,
-    });
+    };
+    if (detectedAt) {
+      logData.detectedAt = new Date(detectedAt);
+    }
+
+    const log = await MalpracticeLog.create(logData);
 
     const candidate = await Candidate.findById(candidateId, 'name email');
     const Room = require('../models/Room');
@@ -140,6 +145,7 @@ const reportViolation = async (req, res, next) => {
       violationType,
       proofScreenshotUrl,
       currentCount: malpracticeCount,
+      detectedAt: log.detectedAt,
     });
 
     io.to(`candidate:${candidateId}`).emit('candidate:warning', {
@@ -222,6 +228,10 @@ const reviewMalpractice = async (req, res, next) => {
       // BUG-21: Recompute and broadcast Tentative Time if disqualified candidate was the leader
       const { broadcastTentativeTime } = require('./submissionController');
       broadcastTentativeTime(io, log.testId, log.roomId);
+
+      // BUG-30 Part A: Check if test should auto-transition to ENDED if all candidates have concluded
+      const { checkAndAutoEndTest } = require('../services/testLifecycleService');
+      checkAndAutoEndTest(log.testId, io).catch(console.error);
     }
 
     res.json({ malpracticeLog: log });

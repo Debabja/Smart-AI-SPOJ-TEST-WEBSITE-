@@ -35,7 +35,13 @@ export function useProctoring({
   const [hasWebcam, setHasWebcam] = useState(false);
   const [hasMic, setHasMic] = useState(false);
   const [isMediaReady, setIsMediaReady] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(true);
+  // BUG-34: Initialize from the actual document fullscreen state rather than assuming true on reload
+  const [isFullscreen, setIsFullscreen] = useState(() => {
+    return Boolean(
+      typeof document !== 'undefined' &&
+      (document.fullscreenElement || document.webkitFullscreenElement)
+    );
+  });
   const [faceCount, setFaceCount] = useState(1);
   const [proctoringActive, setProctoringActive] = useState(false);
   const [detectorReady, setDetectorReady] = useState(false);
@@ -50,12 +56,15 @@ export function useProctoring({
   const candidateIdRef = useRef(candidateId);
   const testIdRef = useRef(testId);
   const roomIdRef = useRef(roomId);
+  const onWarningRef = useRef(onWarning);
+  const hasCheckedInitialFullscreenRef = useRef(false);
 
   useEffect(() => {
     candidateIdRef.current = candidateId;
     testIdRef.current = testId;
     roomIdRef.current = roomId;
-  }, [candidateId, testId, roomId]);
+    onWarningRef.current = onWarning;
+  }, [candidateId, testId, roomId, onWarning]);
 
   // Absence Tracking for NO_FACE_15MIN (PRD FR-7.1)
   const noFaceStartTimeRef = useRef(null);
@@ -64,11 +73,39 @@ export function useProctoring({
   // Consecutive detection counter for MULTIPLE_FACES (prevents single-frame lens/reflection false positives)
   const multiFaceCountRef = useRef(0);
 
-  // Debounce refs for violations (prevent spamming API within 10s per violation type)
+  // Debounce refs for violations (prevent spamming API within 5s per violation type)
   const lastViolationTimeRef = useRef({});
 
+  // Set to track pending delayed screenshot timeouts for clean unmounting (BUG-31)
+  const delayedViolationTimeoutsRef = useRef(new Set());
+
+  // Keyboard lock state tracker (BUG-33: prevents redundant keyboard.lock() calls that keep native prompt visible)
+  const isKeyboardLockedRef = useRef(false);
+
+  const unlockKeyboard = useCallback(() => {
+    if (!isKeyboardLockedRef.current) return;
+    if ('keyboard' in navigator && typeof navigator.keyboard.unlock === 'function') {
+      try {
+        navigator.keyboard.unlock();
+        isKeyboardLockedRef.current = false;
+        console.log('[Proctoring] Keyboard lock released');
+      } catch (err) {
+        console.warn('[Proctoring] Keyboard unlock failed:', err?.message || err);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      // Clear keyboard lock and all active delayed violation timers on unmount
+      unlockKeyboard();
+      delayedViolationTimeoutsRef.current.forEach((id) => clearTimeout(id));
+      delayedViolationTimeoutsRef.current.clear();
+    };
+  }, [unlockKeyboard]);
+
   // ── Helper: Capture Real-time Proof Screenshot for any Violation ──────────────
-  const captureViolationProof = useCallback((violationType) => {
+  const captureViolationProof = useCallback((violationType, timestampDate = new Date()) => {
     try {
       // ASSUMPTION: 'TAB_SWITCH', 'FULLSCREEN_EXIT', 'CAMERA_DISCONNECTED', and 'OTHER' capture candidate's monitor/screen display evidence.
       // Physical presence violations ('PHONE_DETECTED', 'MULTIPLE_FACES', 'NO_FACE_15MIN') capture webcam frames.
@@ -104,7 +141,9 @@ export function useProctoring({
         ctx.fillRect(0, sh - 30, sw, 30);
         ctx.fillStyle = '#E2E8F0';
         ctx.font = '12px monospace';
-        ctx.fillText(`Time: ${new Date().toLocaleTimeString()} · ${new Date().toLocaleDateString()} | Candidate: ${candidateId} | Screen Monitor Capture`, 16, sh - 10);
+        const displayTime = timestampDate.toLocaleTimeString();
+        const displayDate = timestampDate.toLocaleDateString();
+        ctx.fillText(`Time: ${displayTime} · ${displayDate} | Candidate: ${candidateId} | Screen Monitor Capture`, 16, sh - 10);
 
         return canvas.toDataURL('image/jpeg', 0.85);
       }
@@ -136,7 +175,9 @@ export function useProctoring({
         ctx.fillRect(0, vh - 26, vw, 26);
         ctx.fillStyle = '#E2E8F0';
         ctx.font = '11px monospace';
-        ctx.fillText(`Time: ${new Date().toLocaleTimeString()} · ${new Date().toLocaleDateString()}`, 14, vh - 9);
+        const displayTime = timestampDate.toLocaleTimeString();
+        const displayDate = timestampDate.toLocaleDateString();
+        ctx.fillText(`Time: ${displayTime} · ${displayDate}`, 14, vh - 9);
 
         return canvas.toDataURL('image/jpeg', 0.85);
       }
@@ -153,7 +194,7 @@ export function useProctoring({
       ctx.fillText(`⚠️ PROCTORING VIOLATION: ${violationType.replace(/_/g, ' ')}`, 30, 80);
       ctx.fillStyle = '#ffffff';
       ctx.font = '13px monospace';
-      ctx.fillText(`Detected At: ${new Date().toLocaleString()}`, 30, 130);
+      ctx.fillText(`Detected At: ${timestampDate.toLocaleString()}`, 30, 130);
       ctx.fillText(`Candidate ID: ${candidateId}`, 30, 160);
       ctx.fillText(`Test ID: ${testId} | Room: ${roomId}`, 30, 190);
       return canvas.toDataURL('image/jpeg', 0.85);
@@ -173,7 +214,28 @@ export function useProctoring({
     return captureViolationProof('SCREEN_SNAPSHOT');
   }, [captureViolationProof]);
 
-  // ── Helper: Report Violation with Debounce ──────────────────────────────────
+  // ── Helper: Send Violation to API ───────────────────────────────────────────
+  const sendViolationApi = useCallback(async (violationType, proof, detectedAt) => {
+    const cId = candidateIdRef.current || candidateId;
+    const tId = testIdRef.current || testId;
+    const rId = roomIdRef.current || roomId;
+
+    console.warn(`[Proctoring] Submitting violation to API: ${violationType} with proof screenshot (detectedAt: ${detectedAt})`);
+    try {
+      await api.reportViolation({
+        candidateId: cId,
+        testId: tId,
+        roomId: rId,
+        violationType,
+        screenshotBase64: proof,
+        detectedAt,
+      });
+    } catch (err) {
+      console.error(`[Proctoring] Failed to report ${violationType}:`, err);
+    }
+  }, [candidateId, testId, roomId]);
+
+  // ── Helper: Immediate Violation Reporter (MULTIPLE_FACES, NO_FACE_15MIN, CAMERA_DISCONNECTED) ──
   const reportViolation = useCallback(async (violationType, screenshotBase64) => {
     const now = Date.now();
     const lastTime = lastViolationTimeRef.current[violationType] || 0;
@@ -183,22 +245,45 @@ export function useProctoring({
     }
     lastViolationTimeRef.current[violationType] = now;
 
-    // Capture real-time proof frame if none explicitly provided
-    const proof = screenshotBase64 || captureViolationProof(violationType);
+    const detectedAt = new Date(now).toISOString();
+    const proof = screenshotBase64 || captureViolationProof(violationType, new Date(now));
+    await sendViolationApi(violationType, proof, detectedAt);
+  }, [captureViolationProof, sendViolationApi]);
 
-    console.warn(`[Proctoring] Reporting violation: ${violationType} with proof screenshot`);
-    try {
-      await api.reportViolation({
-        candidateId,
-        testId,
-        roomId,
-        violationType,
-        screenshotBase64: proof,
-      });
-    } catch (err) {
-      console.error(`[Proctoring] Failed to report ${violationType}:`, err);
+  // ── BUG-31: 1-Second Delayed Screen-Share Capture for TAB_SWITCH & FULLSCREEN_EXIT ──
+  // Immediately logs the violation, fires socket event and candidate warning banner,
+  // then waits 1 second for the screen/window transition to settle before grabbing proof.
+  const triggerDelayedScreenViolation = useCallback((violationType, onImmediate) => {
+    const now = Date.now();
+    const lastTime = lastViolationTimeRef.current[violationType] || 0;
+    if (now - lastTime < 5000) {
+      // Throttle violation reports to at most once per 5s per type
+      return;
     }
-  }, [candidateId, testId, roomId, captureViolationProof]);
+    lastViolationTimeRef.current[violationType] = now;
+
+    // 1. Immediately record detection timestamp
+    const detectedAt = new Date(now).toISOString();
+
+    // 2. Immediately execute synchronous immediate handlers (toast banner, socket emit, candidate warning)
+    if (typeof onImmediate === 'function') {
+      try {
+        onImmediate(detectedAt);
+      } catch (err) {
+        console.error('[Proctoring] Error in immediate violation handler:', err);
+      }
+    }
+
+    // 3. Wait 1000ms before capturing the screen-share frame to let the screen state settle
+    const timerId = setTimeout(() => {
+      delayedViolationTimeoutsRef.current.delete(timerId);
+      console.log(`[Proctoring] 1s settling delay elapsed for ${violationType}. Grabbing screen proof...`);
+      const proof = captureViolationProof(violationType, new Date(detectedAt));
+      sendViolationApi(violationType, proof, detectedAt);
+    }, 1000);
+
+    delayedViolationTimeoutsRef.current.add(timerId);
+  }, [captureViolationProof, sendViolationApi]);
 
   // ── Camera Disconnect Handler (Immediate Fullscreen Blocking & Lockdown) ────
   const handleCameraDisconnected = useCallback(() => {
@@ -678,28 +763,26 @@ export function useProctoring({
   }, [enabled, captureViolationProof, reportViolation]);
 
   // ── Keyboard Lock API Helpers (Disables Alt+Tab, Escape, Meta in Fullscreen) ──
+  // BUG-33: Guard with isKeyboardLockedRef to prevent redundant navigator.keyboard.lock() calls,
+  // which continually re-trigger Chromium's native "press and hold Esc to exit" banner on re-renders.
   const lockKeyboard = useCallback(async () => {
+    if (isKeyboardLockedRef.current) return;
+    const inFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+    if (!inFullscreen) return;
+
     if ('keyboard' in navigator && typeof navigator.keyboard.lock === 'function') {
       try {
+        isKeyboardLockedRef.current = true;
         await navigator.keyboard.lock();
         console.log('[Proctoring] Keyboard lock engaged (Alt+Tab and system shortcuts restricted)');
       } catch (err) {
+        isKeyboardLockedRef.current = false;
         console.warn('[Proctoring] Keyboard lock could not be engaged:', err?.message || err);
       }
     }
   }, []);
 
-  const unlockKeyboard = useCallback(() => {
-    if ('keyboard' in navigator && typeof navigator.keyboard.unlock === 'function') {
-      try {
-        navigator.keyboard.unlock();
-      } catch (err) {
-        console.warn('[Proctoring] Keyboard unlock failed:', err?.message || err);
-      }
-    }
-  }, []);
-
-  // ── 4. Fullscreen Enforcement & Exit Detection (FR-5.2, FR-5.3) ─────────────
+  // ── 4. Fullscreen Enforcement & Exit Detection (FR-5.2, FR-5.3, BUG-34) ─────
   useEffect(() => {
     if (!enabled) return;
 
@@ -711,27 +794,46 @@ export function useProctoring({
         lockKeyboard();
       } else {
         unlockKeyboard();
-        emitFullscreenExit({ candidateId, testId, roomId });
-        const proof = captureViolationProof('FULLSCREEN_EXIT');
-        reportViolation('FULLSCREEN_EXIT', proof);
-        toast.error('⚠️ Fullscreen exited! You must remain in full-screen mode.', { duration: 4000 });
+        // BUG-31: Immediate detection, socket alert, and toast; 1s delayed screen-capture screenshot
+        triggerDelayedScreenViolation('FULLSCREEN_EXIT', () => {
+          emitFullscreenExit({ candidateId, testId, roomId });
+          if (typeof onWarningRef.current === 'function') {
+            onWarningRef.current('Violation detected: FULLSCREEN EXIT. This has been flagged.');
+          }
+          toast.error('⚠️ Fullscreen exited! You must remain in full-screen mode.', { duration: 4000 });
+        });
       }
     };
 
-    // If candidate enters screen already in fullscreen, engage keyboard lock
-    if (document.fullscreenElement || document.webkitFullscreenElement) {
+    // BUG-34: Check fullscreen state immediately upon mount/reload.
+    // If candidate loads or refreshes outside fullscreen, immediately block and report violation.
+    const inFullscreenOnMount = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+    if (inFullscreenOnMount) {
+      setIsFullscreen(true);
       lockKeyboard();
+    } else {
+      setIsFullscreen(false);
+      // ASSUMPTION: Fullscreen exits resulting from a browser refresh/reload are logged as standard FULLSCREEN_EXIT violations and count toward the candidate's malpractice total and disqualification threshold.
+      if (!hasCheckedInitialFullscreenRef.current) {
+        hasCheckedInitialFullscreenRef.current = true;
+        triggerDelayedScreenViolation('FULLSCREEN_EXIT', () => {
+          emitFullscreenExit({ candidateId, testId, roomId });
+          if (typeof onWarningRef.current === 'function') {
+            onWarningRef.current('Violation detected: FULLSCREEN EXIT. You must return to fullscreen mode to continue.');
+          }
+          toast.error('⚠️ Fullscreen required! You must remain in full-screen mode.', { duration: 4000 });
+        });
+      }
     }
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
 
     return () => {
-      unlockKeyboard();
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
     };
-  }, [enabled, candidateId, testId, roomId, captureViolationProof, reportViolation, lockKeyboard, unlockKeyboard]);
+  }, [enabled, candidateId, testId, roomId, triggerDelayedScreenViolation, lockKeyboard, unlockKeyboard]);
 
   // ── 5. Tab Switch / Window Blur Detection (FR-5.3) ───────────────────────────
   useEffect(() => {
@@ -739,17 +841,25 @@ export function useProctoring({
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        emitTabSwitch({ candidateId, testId, roomId });
-        const proof = captureViolationProof('TAB_SWITCH');
-        reportViolation('TAB_SWITCH', proof);
-        toast.error('⚠️ Tab switch detected! Switching tabs is strictly prohibited.', { duration: 4000 });
+        // BUG-31: Immediate detection, socket alert, and toast; 1s delayed screen-capture screenshot
+        triggerDelayedScreenViolation('TAB_SWITCH', () => {
+          emitTabSwitch({ candidateId, testId, roomId });
+          if (typeof onWarningRef.current === 'function') {
+            onWarningRef.current('Violation detected: TAB SWITCH. This has been flagged.');
+          }
+          toast.error('⚠️ Tab switch detected! Switching tabs is strictly prohibited.', { duration: 4000 });
+        });
       }
     };
 
     const handleWindowBlur = () => {
-      emitTabSwitch({ candidateId, testId, roomId });
-      const proof = captureViolationProof('TAB_SWITCH');
-      reportViolation('TAB_SWITCH', proof);
+      // BUG-31: Immediate detection and socket alert; 1s delayed screen-capture screenshot
+      triggerDelayedScreenViolation('TAB_SWITCH', () => {
+        emitTabSwitch({ candidateId, testId, roomId });
+        if (typeof onWarningRef.current === 'function') {
+          onWarningRef.current('Violation detected: TAB SWITCH. This has been flagged.');
+        }
+      });
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -759,7 +869,7 @@ export function useProctoring({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [enabled, candidateId, testId, roomId, captureViolationProof, reportViolation]);
+  }, [enabled, candidateId, testId, roomId, triggerDelayedScreenViolation]);
 
   // ── 6. Copy-Paste / Right-Click Blocking (FR-5.4) ───────────────────────────
   useEffect(() => {
@@ -852,16 +962,22 @@ export function useProctoring({
     };
   }, [enabled]);
 
-  // Enter Fullscreen Helper
+  // Enter Fullscreen Helper (BUG-34)
   const requestFullscreen = async () => {
     try {
-      if (!document.fullscreenElement) {
-        await document.documentElement.requestFullscreen();
+      const el = document.documentElement;
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        if (el.requestFullscreen) {
+          await el.requestFullscreen();
+        } else if (el.webkitRequestFullscreen) {
+          await el.webkitRequestFullscreen();
+        }
         setIsFullscreen(true);
         await lockKeyboard();
       }
     } catch (err) {
-      console.error('Fullscreen request failed:', err);
+      console.error('[Proctoring] Fullscreen request failed:', err);
+      toast.error('Failed to enter fullscreen mode. Please try clicking the button again.');
     }
   };
 

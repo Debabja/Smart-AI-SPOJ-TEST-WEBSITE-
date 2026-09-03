@@ -65,6 +65,102 @@ console.log('AI Test Project Initialized');
 `
 };
 
+// ── Segmented View Mode Toggle Component (Split / Code / Preview) ────────────
+const ViewModeSegmentedToggle = ({ viewMode, onChange, compact = false }) => {
+  return (
+    <div
+      role="group"
+      aria-label="Editor View Mode"
+      className="view-mode-segmented-toggle"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        background: '#090d16',
+        border: '1px solid #1e293b',
+        borderRadius: 6,
+        padding: 2,
+        gap: 2,
+        boxShadow: '0 2px 5px rgba(0,0,0,0.25)',
+      }}
+    >
+      <button
+        type="button"
+        id={compact ? 'view-mode-split-compact-btn' : 'view-mode-split-btn'}
+        onClick={() => onChange('split')}
+        title="Split View (Code Editor & Preview side-by-side)"
+        style={{
+          background: viewMode === 'split' ? '#0E7C86' : 'transparent',
+          color: viewMode === 'split' ? '#ffffff' : '#94a3b8',
+          border: 'none',
+          borderRadius: 4,
+          padding: compact ? '2px 8px' : '4px 12px',
+          fontSize: compact ? '0.7rem' : '0.75rem',
+          fontWeight: viewMode === 'split' ? 700 : 500,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          transition: 'all 0.15s ease',
+          lineHeight: 1.2,
+        }}
+      >
+        <span style={{ fontSize: compact ? '0.75rem' : '0.8rem', lineHeight: 1 }}>◫</span>
+        <span>Split</span>
+      </button>
+
+      <button
+        type="button"
+        id={compact ? 'view-mode-code-compact-btn' : 'view-mode-code-btn'}
+        onClick={() => onChange('code')}
+        title="Code View (Full-width Code Editor)"
+        style={{
+          background: viewMode === 'code' ? '#0E7C86' : 'transparent',
+          color: viewMode === 'code' ? '#ffffff' : '#94a3b8',
+          border: 'none',
+          borderRadius: 4,
+          padding: compact ? '2px 8px' : '4px 12px',
+          fontSize: compact ? '0.7rem' : '0.75rem',
+          fontWeight: viewMode === 'code' ? 700 : 500,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          transition: 'all 0.15s ease',
+          lineHeight: 1.2,
+        }}
+      >
+        <span style={{ fontSize: compact ? '0.75rem' : '0.8rem', lineHeight: 1 }}>💻</span>
+        <span>Code</span>
+      </button>
+
+      <button
+        type="button"
+        id={compact ? 'view-mode-preview-compact-btn' : 'view-mode-preview-btn'}
+        onClick={() => onChange('preview')}
+        title="Preview View (Full-width Preview)"
+        style={{
+          background: viewMode === 'preview' ? '#0E7C86' : 'transparent',
+          color: viewMode === 'preview' ? '#ffffff' : '#94a3b8',
+          border: 'none',
+          borderRadius: 4,
+          padding: compact ? '2px 8px' : '4px 12px',
+          fontSize: compact ? '0.7rem' : '0.75rem',
+          fontWeight: viewMode === 'preview' ? 700 : 500,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          transition: 'all 0.15s ease',
+          lineHeight: 1.2,
+        }}
+      >
+        <span style={{ fontSize: compact ? '0.7rem' : '0.75rem', lineHeight: 1 }}>▶</span>
+        <span>Preview</span>
+      </button>
+    </div>
+  );
+};
+
 export default function CandidateAITestScreen() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -76,6 +172,25 @@ export default function CandidateAITestScreen() {
   const [activeFile, setActiveFile] = useState('index.html');
   const [newFileName, setNewFileName] = useState('');
   const [showAddFile, setShowAddFile] = useState(false);
+
+  // ── Split / Code / Preview View Mode State ────────────────────────────────
+  const [viewMode, setViewMode] = useState(() => {
+    const saved = sessionStorage.getItem('ai_test_view_mode');
+    return saved === 'code' || saved === 'preview' ? saved : 'split';
+  });
+
+  const handleViewModeChange = useCallback((mode) => {
+    setViewMode(mode);
+    sessionStorage.setItem('ai_test_view_mode', mode);
+  }, []);
+
+  useEffect(() => {
+    // When switching view modes, re-layout Monaco editor smoothly
+    const timer = setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+    }, 60);
+    return () => clearTimeout(timer);
+  }, [viewMode]);
 
   // ── Single-Row 4-Panel Resizable Workspace State ──────────────────────────
   const [panelWidths, setPanelWidths] = useState(() => {
@@ -110,7 +225,7 @@ export default function CandidateAITestScreen() {
     e.preventDefault();
     if (!containerRef.current || maximizedPanel !== null) return;
 
-    // Total width available for the 4 panels excluding the 3 splitters (each 10px = 30px) and padding (16px)
+    // Total width available for the panels excluding splitters and padding
     const containerWidth = Math.max(containerRef.current.clientWidth - 46, 500);
     dragStartRef.current = {
       clientX: e.clientX,
@@ -133,7 +248,48 @@ export default function CandidateAITestScreen() {
 
       const idx = activeSplitter; // 0, 1, or 2
 
-      // Sensible min widths: ~160px for question, ~200px for editor, ~180px for preview, ~180px for chat
+      if (viewMode === 'code' || viewMode === 'preview') {
+        const combinedWidth12 = widths[1] + widths[2];
+        const ratio1 = widths[1] / (combinedWidth12 || 1);
+
+        if (idx === 0) {
+          // Dragging Splitter 0 (Question vs expanded center panel)
+          const min0 = (160 / containerWidth) * 100;
+          const minCenter = (200 / containerWidth) * 100;
+          const totalAvailable = widths[0] + combinedWidth12;
+
+          let newWidth0 = Math.max(min0, Math.min(widths[0] + deltaPercent, totalAvailable - minCenter));
+          let newCenterWidth = totalAvailable - newWidth0;
+
+          setPanelWidths((prev) => [
+            newWidth0,
+            newCenterWidth * ratio1,
+            newCenterWidth * (1 - ratio1),
+            prev[3],
+          ]);
+          return;
+        }
+
+        if (idx === 2) {
+          // Dragging Splitter 2 (expanded center panel vs AI Assistant)
+          const minCenter = (200 / containerWidth) * 100;
+          const min3 = (180 / containerWidth) * 100;
+          const totalAvailable = combinedWidth12 + widths[3];
+
+          let newWidth3 = Math.max(min3, Math.min(widths[3] - deltaPercent, totalAvailable - minCenter));
+          let newCenterWidth = totalAvailable - newWidth3;
+
+          setPanelWidths((prev) => [
+            prev[0],
+            newCenterWidth * ratio1,
+            newCenterWidth * (1 - ratio1),
+            newWidth3,
+          ]);
+          return;
+        }
+      }
+
+      // Default Split mode dragging
       const minPixels = [160, 200, 180, 180];
       const minPercentA = (minPixels[idx] / containerWidth) * 100;
       const minPercentB = (minPixels[idx + 1] / containerWidth) * 100;
@@ -174,7 +330,7 @@ export default function CandidateAITestScreen() {
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
     };
-  }, [activeSplitter]);
+  }, [activeSplitter, viewMode]);
 
   // AI Chat state
   const [chatMessages, setChatMessages] = useState([]);
@@ -266,12 +422,17 @@ export default function CandidateAITestScreen() {
 
   // ── Client-Side AI Proctoring (FR-5.2, FR-5.3, FR-5.4, FR-6.1, FR-7.1, FR-7.2) ──
   // allowInternalCopyPaste: true allows candidate to copy code from Kimi Chat into Monaco files (FR-6.1)
+  const handleProctorWarning = useCallback((msg) => {
+    setWarningMessage(msg);
+  }, []);
+
   const proctoring = useProctoring({
     testId: session?.test?._id,
     roomId: session?.room?._id,
     candidateId: user?.id || user?._id,
     enabled: Boolean(session && user && !disqualified),
     allowInternalCopyPaste: true,
+    onWarning: handleProctorWarning,
   });
 
   // Socket proctor warnings / disqualifications
@@ -536,6 +697,9 @@ export default function CandidateAITestScreen() {
             </span>
           </div>
 
+          {/* View Mode Toggle: Split / Code / Preview (Feature Request) */}
+          <ViewModeSegmentedToggle viewMode={viewMode} onChange={handleViewModeChange} />
+
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <button
               id="ai-submit-question-btn"
@@ -797,9 +961,15 @@ export default function CandidateAITestScreen() {
         {/* ── PANEL 2: Code Editor ── */}
         <div
           style={{
-            flex: maximizedPanel === 'editor' ? '1 1 100%' : `0 0 calc(${panelWidths[1]}% - 7.5px)`,
+            flex: maximizedPanel === 'editor'
+              ? '1 1 100%'
+              : viewMode === 'code'
+              ? `0 0 calc(${panelWidths[1] + panelWidths[2]}% - 5px)`
+              : `0 0 calc(${panelWidths[1]}% - 7.5px)`,
             minWidth: maximizedPanel === 'editor' ? 'auto' : 200,
-            display: !maximizedPanel || maximizedPanel === 'editor' ? 'flex' : 'none',
+            display: !maximizedPanel
+              ? (viewMode === 'preview' ? 'none' : 'flex')
+              : (maximizedPanel === 'editor' ? 'flex' : 'none'),
             flexDirection: 'column',
             background: '#0f172a',
             border: '1.5px solid #0284c7',
@@ -840,7 +1010,8 @@ export default function CandidateAITestScreen() {
                 Code Editor
               </span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <ViewModeSegmentedToggle viewMode={viewMode} onChange={handleViewModeChange} compact />
               <button
                 type="button"
                 title={maximizedPanel === 'editor' ? 'Restore Panel' : 'Maximize Panel'}
@@ -1017,7 +1188,7 @@ export default function CandidateAITestScreen() {
         </div>
 
         {/* ── SPLITTER 1: Code Editor <-> Preview ── */}
-        {!maximizedPanel && (
+        {!maximizedPanel && viewMode === 'split' && (
           <div
             onMouseDown={(e) => handleSplitterMouseDown(e, 1)}
             title="Drag horizontally to resize Code Editor and Preview"
@@ -1066,9 +1237,15 @@ export default function CandidateAITestScreen() {
         {/* ── PANEL 3: Preview ── */}
         <div
           style={{
-            flex: maximizedPanel === 'preview' ? '1 1 100%' : `0 0 calc(${panelWidths[2]}% - 7.5px)`,
+            flex: maximizedPanel === 'preview'
+              ? '1 1 100%'
+              : viewMode === 'preview'
+              ? `0 0 calc(${panelWidths[1] + panelWidths[2]}% - 5px)`
+              : `0 0 calc(${panelWidths[2]}% - 7.5px)`,
             minWidth: maximizedPanel === 'preview' ? 'auto' : 180,
-            display: !maximizedPanel || maximizedPanel === 'preview' ? 'flex' : 'none',
+            display: !maximizedPanel
+              ? (viewMode === 'code' ? 'none' : 'flex')
+              : (maximizedPanel === 'preview' ? 'flex' : 'none'),
             flexDirection: 'column',
             background: '#ffffff',
             border: '1.5px solid #10b981',
@@ -1109,7 +1286,8 @@ export default function CandidateAITestScreen() {
                 Preview
               </span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <ViewModeSegmentedToggle viewMode={viewMode} onChange={handleViewModeChange} compact />
               <button
                 type="button"
                 title={maximizedPanel === 'preview' ? 'Restore Panel' : 'Maximize Panel'}
@@ -1667,19 +1845,21 @@ export default function CandidateAITestScreen() {
       {/* ── Movable AI Proctoring PIP Feed (FR-5.2, FR-7.1, FR-7.2) ── */}
       <DraggableWebcamPip videoRef={proctoring.videoRef} faceCount={proctoring.faceCount} />
 
-      {/* ── Fullscreen Enforcement Lock Overlay (FR-5.2, FR-5.3) ── */}
+      {/* ── Fullscreen Enforcement Lock Overlay (FR-5.2, FR-5.3, BUG-34) ── */}
       {!proctoring.isFullscreen && !disqualified && (
         <div
+          id="ai-fullscreen-blocking-overlay"
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(15, 23, 42, 0.96)',
-            zIndex: 9999,
+            background: 'rgba(15, 23, 42, 0.98)',
+            zIndex: 99999,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             padding: 24,
+            backdropFilter: 'blur(8px)',
           }}
         >
           <div style={{ fontSize: '3.5rem', marginBottom: 12 }}>⚠️</div>
@@ -1687,12 +1867,13 @@ export default function CandidateAITestScreen() {
             Fullscreen Mode Required
           </h2>
           <p style={{ color: '#94a3b8', maxWidth: 480, textAlign: 'center', marginBottom: 24, lineHeight: 1.6, fontSize: '0.9rem' }}>
-            You have exited full-screen mode. This proctored assessment strictly requires fullscreen operation throughout the entire session (FR-5.2). Exiting has been logged.
+            You are currently outside full-screen mode. This proctored assessment strictly requires fullscreen operation throughout the entire session (FR-5.2). Exiting has been logged.
           </p>
           <button
+            id="ai-re-enter-fullscreen-btn"
             onClick={proctoring.requestFullscreen}
             className="btn btn-primary btn-lg"
-            style={{ fontSize: '1rem', padding: '12px 28px' }}
+            style={{ fontSize: '1rem', padding: '12px 28px', fontWeight: 700 }}
           >
             ⛶ Re-enter Fullscreen Mode
           </button>

@@ -472,12 +472,17 @@ export default function CandidateTestScreen() {
   }, [session, user, activeQuestion, questionProgress]);
 
   // ── Client-Side AI Proctoring (FR-5.2, FR-5.3, FR-5.4, FR-7.1, FR-7.2) ────────
+  const handleProctorWarning = useCallback((msg) => {
+    setWarningMessage(msg);
+  }, []);
+
   const proctoring = useProctoring({
     testId: session?.test?._id,
     roomId: session?.room?._id,
     candidateId: user?.id || user?._id,
     enabled: Boolean(session && user && !disqualified),
     allowInternalCopyPaste: false,
+    onWarning: handleProctorWarning,
   });
 
   // ── Socket: candidate:warning + candidate:disqualified + test:ended ───────────
@@ -1323,19 +1328,21 @@ export default function CandidateTestScreen() {
       {/* ── Movable AI Proctoring PIP Feed (FR-5.2, FR-7.1, FR-7.2) ── */}
       <DraggableWebcamPip videoRef={proctoring.videoRef} faceCount={proctoring.faceCount} />
 
-      {/* ── Fullscreen Enforcement Lock Overlay (FR-5.2, FR-5.3) ── */}
+      {/* ── Fullscreen Enforcement Lock Overlay (FR-5.2, FR-5.3, BUG-34) ── */}
       {!proctoring.isFullscreen && !disqualified && (
         <div
+          id="fullscreen-blocking-overlay"
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(15, 23, 42, 0.96)',
-            zIndex: 9999,
+            background: 'rgba(15, 23, 42, 0.98)',
+            zIndex: 99999,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             padding: 24,
+            backdropFilter: 'blur(8px)',
           }}
         >
           <div style={{ fontSize: '3.5rem', marginBottom: 12 }}>⚠️</div>
@@ -1343,12 +1350,13 @@ export default function CandidateTestScreen() {
             Fullscreen Mode Required
           </h2>
           <p style={{ color: '#94a3b8', maxWidth: 480, textAlign: 'center', marginBottom: 24, lineHeight: 1.6, fontSize: '0.9rem' }}>
-            You have exited full-screen mode. This proctored assessment strictly requires fullscreen operation throughout the entire session (FR-5.2). Exiting has been logged.
+            You are currently outside full-screen mode. This proctored assessment strictly requires fullscreen operation throughout the entire session (FR-5.2). Exiting has been logged.
           </p>
           <button
+            id="re-enter-fullscreen-btn"
             onClick={proctoring.requestFullscreen}
             className="btn btn-primary btn-lg"
-            style={{ fontSize: '1rem', padding: '12px 28px' }}
+            style={{ fontSize: '1rem', padding: '12px 28px', fontWeight: 700 }}
           >
             ⛶ Re-enter Fullscreen Mode
           </button>

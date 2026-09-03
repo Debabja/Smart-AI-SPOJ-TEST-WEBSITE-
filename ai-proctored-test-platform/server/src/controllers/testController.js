@@ -47,6 +47,10 @@ const createTest = async (req, res, next) => {
 // ── GET /tests ────────────────────────────────────────────────────────────────
 const getTests = async (req, res, next) => {
   try {
+    // BUG-30 Part A: Opportunistically check and auto-end any completed LIVE tests
+    const { checkAndAutoEndAllLiveTests } = require('../services/testLifecycleService');
+    await checkAndAutoEndAllLiveTests(req.app.get('io'));
+
     const tests = await Test.find()
       .populate('createdBy', 'name email')
       .populate('questionSetId', 'name testType')
@@ -60,6 +64,10 @@ const getTests = async (req, res, next) => {
 // ── GET /tests/:testId ────────────────────────────────────────────────────────
 const getTest = async (req, res, next) => {
   try {
+    // BUG-30 Part A: Opportunistically check and auto-end if this test has completed
+    const { checkAndAutoEndTest } = require('../services/testLifecycleService');
+    await checkAndAutoEndTest(req.params.testId, req.app.get('io'));
+
     const test = await Test.findById(req.params.testId)
       .populate('createdBy', 'name email')
       .populate('questionSetId', 'name testType questionIds');
@@ -196,37 +204,9 @@ const startTest = async (req, res, next) => {
 // Sets status to ENDED; triggers final evaluation pass; broadcasts test:ended to candidates
 const endTest = async (req, res, next) => {
   try {
-    const test = await Test.findByIdAndUpdate(
-      req.params.testId,
-      { status: 'ENDED' },
-      { new: true }
-    );
+    const { performEndTest } = require('../services/testLifecycleService');
+    const test = await performEndTest(req.params.testId, req.app.get('io'), 'MANUAL');
     if (!test) return res.status(404).json({ error: 'Test not found' });
-
-    // BUG-22: Automatically transition all rooms for this test from ACTIVE to CLOSED
-    const Room = require('../models/Room');
-    await Room.updateMany(
-      { testId: test._id, status: 'ACTIVE' },
-      { status: 'CLOSED' }
-    );
-
-    // Section 10.2: broadcast test:ended to all candidates and admins
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`test:${test._id}:admin`).emit('test:ended', { testId: test._id });
-      io.to(`test:${test._id}:admin`).emit('room:updated', { testId: test._id, action: 'ROOMS_CLOSED' });
-      // Broadcast to all candidate rooms for this test
-      // Candidates are in rooms test:{testId}:room:{roomId} — we emit to test:{testId}:* pattern
-      // Socket.io doesn't support wildcards natively; we use a dedicated test-level room for broadcasts
-      io.to(`test:${test._id}`).emit('test:ended', { testId: test._id });
-    }
-
-    // Trigger final evaluation pass (evaluation worker)
-    const evaluationService = require('../services/evaluationService');
-    evaluationService.runFinalEvaluationPass(test._id.toString()).catch((err) => {
-      console.error('[Evaluation] Final pass error:', err);
-    });
-
     res.json({ test });
   } catch (err) {
     next(err);

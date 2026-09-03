@@ -82,7 +82,7 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
       onClick={() => onClick(candidate)}
       style={{
         background: isWhite ? '#ffffff' : `${color}15`,
-        border: `2px solid ${isWhite ? '#e5e7eb' : color}`,
+        border: `2px solid ${isWhite ? '#111827' : color}`,
         borderRadius: 10,
         padding: '12px 14px',
         cursor: 'pointer',
@@ -91,10 +91,10 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
         flexDirection: 'column',
         justifyContent: 'space-between',
         minHeight: 115,
-        boxShadow: isWhite ? 'none' : `0 2px 8px ${color}20`,
+        boxShadow: isWhite ? '0 1px 4px rgba(0,0,0,0.06)' : `0 2px 8px ${color}20`,
         position: 'relative',
         overflow: 'hidden',
-        opacity: isWhite ? 0.75 : 1,
+        opacity: 1,
       }}
       className="seat-tile-hover"
     >
@@ -132,18 +132,19 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
           </span>
         </div>
 
-        {/* Status dot / badge */}
+        {/* Status dot / badge (BUG-32: clearly visible on all tile backgrounds) */}
         <span
           style={{
             width: 10,
             height: 10,
             borderRadius: '50%',
-            backgroundColor: color,
+            backgroundColor: isWhite ? '#94A3B8' : color,
+            border: isWhite ? '1.5px solid #111827' : `1px solid ${color}`,
             display: 'inline-block',
-            boxShadow: `0 0 6px ${color}`,
+            boxShadow: isWhite ? 'none' : `0 0 6px ${color}`,
             flexShrink: 0,
           }}
-          title={`Status: ${candidate.colorStatus || (isCandidateInProgress ? 'YELLOW' : 'WHITE')}`}
+          title={`Status: ${candidate.status || (isCandidateInProgress ? 'IN_PROGRESS' : 'NOT_STARTED')}`}
         />
       </div>
 
@@ -157,21 +158,10 @@ const SeatTile = memo(({ candidate, roomName, onClick, now }) => {
         </div>
       </div>
 
-      {/* Bottom Footer: Live Countdown Timer (Requirement 2d) */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', marginTop: 4 }}>
+      {/* Bottom Footer: Live Countdown Timer / Status (BUG-32: redundant color label removed) */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem', marginTop: 4 }}>
         <span style={{ color: '#4b5563', fontFamily: 'monospace', fontWeight: 600 }}>
           {formattedTimer}
-        </span>
-
-        <span
-          style={{
-            fontSize: '0.65rem',
-            color: color === '#F1C40F' ? '#b45309' : color,
-            fontWeight: 700,
-            textTransform: 'uppercase',
-          }}
-        >
-          {candidate.colorStatus || (isCandidateInProgress ? 'YELLOW' : 'WHITE')}
         </span>
       </div>
     </div>
@@ -219,7 +209,7 @@ const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqua
         borderBottom: '1px solid #f3f4f6',
         fontSize: '0.85rem',
         background: 'white',
-        opacity: isWhite ? 0.7 : 1,
+        opacity: 1,
       }}
     >
       {/* Candidate Name + Persistent Malpractice Counter (FR-7.3) */}
@@ -229,7 +219,8 @@ const CandidateRowItem = memo(({ candidate, roomName, onSelect, onWarn, onDisqua
             width: 8,
             height: 8,
             borderRadius: '50%',
-            backgroundColor: color,
+            backgroundColor: isWhite ? '#94A3B8' : color,
+            border: isWhite ? '1.5px solid #111827' : `1px solid ${color}`,
             flexShrink: 0,
             boxShadow: isCandidateInProgress ? `0 0 6px ${color}` : 'none',
           }}
@@ -946,18 +937,41 @@ export default function AdminLiveDashboard() {
       return remaining > 0;
     });
 
-    // ASSUMPTION: If no candidates are currently in progress in the selected scope (none started yet or all finished),
-    // display "—" (or "Not started" if room has joined candidates who haven't started yet) as a clear fallback.
+    // BUG-30 Part B: Distinguish between "no candidate has ever joined/started yet" vs "all candidates finished/reached terminal state"
     if (inProgressCandidates.length === 0) {
       const candidatesInScope = Object.values(candidatesMap).filter((c) => {
         const cRoomId = typeof c.roomId === 'object' ? (c.roomId?._id || c.roomId?.id) : c.roomId;
         return selectedRoomId === 'ALL' || String(cRoomId) === String(selectedRoomId);
       });
-      const hasPendingNotStarted = candidatesInScope.some(
-        (c) => c.status === 'NOT_STARTED' || (!c.candidateStartTime && c.status !== 'SUBMITTED' && c.status !== 'AUTO_SUBMITTED_TIME_UP')
+
+      // Scenario 1: Zero candidates have ever joined this test / room
+      if (candidatesInScope.length === 0) {
+        return {
+          formatted: 'Not started',
+          rawMs: 0,
+          hasActive: false,
+        };
+      }
+
+      // Check if any candidate has started at all (or is in an active/finished state)
+      const anyCandidateStarted = candidatesInScope.some(
+        (c) => c.candidateStartTime || c.status === 'IN_PROGRESS' || c.status === 'SUBMITTED' || c.status === 'AUTO_SUBMITTED_TIME_UP'
       );
+
+      // Scenario 1b: Candidates joined a room, but none have clicked "Start Test" yet
+      if (!anyCandidateStarted) {
+        return {
+          formatted: 'Not started',
+          rawMs: 0,
+          hasActive: false,
+        };
+      }
+
+      // Scenario 2: Candidates DID join and have all reached a terminal state
+      // (all SUBMITTED, AUTO_SUBMITTED_TIME_UP, DISQUALIFIED, or timer expired)
+      // ASSUMPTION (BUG-30 Part B): Show "Session concluded" to clearly indicate session completion.
       return {
-        formatted: hasPendingNotStarted ? 'Not started' : '—',
+        formatted: 'Session concluded',
         rawMs: 0,
         hasActive: false,
       };
@@ -1114,7 +1128,9 @@ export default function AdminLiveDashboard() {
                   title={
                     tentativeTimer.hasActive
                       ? `Tentative Time: Session concludes when the last candidate finishes in ${tentativeTimer.formatted}`
-                      : 'Tentative Time'
+                      : tentativeTimer.formatted === 'Session concluded'
+                      ? 'Tentative Time: All candidates have finished or reached terminal states'
+                      : 'Tentative Time: No candidates have started yet'
                   }
                 >
                   <span style={{ fontSize: '1rem' }}>⏱️</span>
@@ -1122,7 +1138,14 @@ export default function AdminLiveDashboard() {
                     <div style={{ fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94A3B8', fontWeight: 700 }}>
                       Tentative Time
                     </div>
-                    <div style={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 800, color: tentativeTimer.hasActive ? '#38BDF8' : '#94A3B8', letterSpacing: '0.03em', lineHeight: 1.1 }}>
+                    <div style={{
+                      fontFamily: tentativeTimer.hasActive ? 'monospace' : 'inherit',
+                      fontSize: tentativeTimer.hasActive ? '0.95rem' : '0.82rem',
+                      fontWeight: 800,
+                      color: tentativeTimer.hasActive ? '#38BDF8' : '#94A3B8',
+                      letterSpacing: tentativeTimer.hasActive ? '0.03em' : 'normal',
+                      lineHeight: 1.1
+                    }}>
                       {tentativeTimer.formatted}
                     </div>
                   </div>
@@ -1299,7 +1322,7 @@ export default function AdminLiveDashboard() {
                 <span>Disqualified</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 12, height: 12, borderRadius: 3, background: '#ffffff', border: '1.5px solid #e5e7eb' }} />
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: '#ffffff', border: '2px solid #111827' }} />
                 <span>Not Started</span>
               </div>
             </div>

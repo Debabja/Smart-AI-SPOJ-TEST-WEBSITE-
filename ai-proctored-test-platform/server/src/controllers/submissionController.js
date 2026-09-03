@@ -559,6 +559,10 @@ const submitAll = async (req, res, next) => {
     const evaluationService = require('../services/evaluationService');
     evaluationService.evaluateCandidateSubmissions(candidateId, testId).catch(console.error);
 
+    // BUG-30 Part A: Check if test should auto-transition to ENDED now that this candidate submitted
+    const { checkAndAutoEndTest } = require('../services/testLifecycleService');
+    checkAndAutoEndTest(testId, io).catch(console.error);
+
     res.json({ success: true });
   } catch (err) {
     next(err);

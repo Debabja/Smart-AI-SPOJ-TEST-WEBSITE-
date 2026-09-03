@@ -269,6 +269,11 @@ const getRoomCandidates = async (req, res, next) => {
 const getLiveCandidates = async (req, res, next) => {
   try {
     const { testId } = req.params;
+
+    // BUG-30 Part A: Check if test has completed its run and should auto-transition to ENDED
+    const { checkAndAutoEndTest } = require('../services/testLifecycleService');
+    await checkAndAutoEndTest(testId, req.app.get('io'));
+
     const test = await Test.findById(testId);
     if (!test) return res.status(404).json({ error: 'Test not found' });
 

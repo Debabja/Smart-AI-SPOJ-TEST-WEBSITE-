@@ -83,6 +83,10 @@ mongoose
     // Register Socket.io handlers after DB is ready
     registerSocketHandlers(io);
 
+    // BUG-30 Part A: Start background lifecycle scheduler for auto-ending completed tests
+    const { startLifecycleScheduler } = require('./services/testLifecycleService');
+    startLifecycleScheduler(io);
+
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {
       console.log(`[Server] Running on port ${PORT} | ENV: ${process.env.NODE_ENV}`);
